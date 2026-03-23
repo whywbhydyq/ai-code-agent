@@ -1,14 +1,39 @@
-const DEFAULT_PORT = 9960;
+var DEFAULT_PORT = 9960;
+var MAX_PORT_SCAN = 10;
 
-function getServerUrl() {
-    return new Promise((resolve) => {
-        chrome.storage.local.get(['serverPort'], (r) => {
-            resolve(`http://127.0.0.1:${r.serverPort || DEFAULT_PORT}`);
+// 自动探测可用端口（从配置端口开始扫描）
+async function findServerUrl() {
+    return new Promise(function(resolve) {
+        chrome.storage.local.get(['serverPort'], async function(r) {
+            var basePort = r.serverPort || DEFAULT_PORT;
+
+            for (var i = 0; i < MAX_PORT_SCAN; i++) {
+                var port = basePort + i;
+                var url = 'http://127.0.0.1:' + port;
+                try {
+                    var resp = await fetch(url + '/status', { signal: AbortSignal.timeout(500) });
+                    if (resp.ok) {
+                        resolve(url);
+                        return;
+                    }
+                } catch (_) {}
+            }
+            // 都找不到，返回默认
+            resolve('http://127.0.0.1:' + basePort);
         });
     });
 }
 
-chrome.runtime.onInstalled.addListener(() => {
+// 简单版（不扫描，直接用配置端口）
+function getServerUrl() {
+    return new Promise(function(resolve) {
+        chrome.storage.local.get(['serverPort'], function(r) {
+            resolve('http://127.0.0.1:' + (r.serverPort || DEFAULT_PORT));
+        });
+    });
+}
+
+chrome.runtime.onInstalled.addListener(function() {
     chrome.contextMenus.create({
         id: 'send-to-vscode',
         title: '📤 发送选中文本到 VS Code',
@@ -21,9 +46,9 @@ chrome.runtime.onInstalled.addListener(() => {
     });
 });
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+chrome.contextMenus.onClicked.addListener(async function(info, tab) {
     if (info.menuItemId === 'send-to-vscode' && info.selectionText) {
-        const result = await sendToVSCode({ type: 'raw-text', text: info.selectionText });
+        var result = await sendToVSCode({ type: 'raw-text', text: info.selectionText });
         chrome.tabs.sendMessage(tab.id, {
             type: 'show-notification',
             success: result.success,
@@ -35,17 +60,15 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }
 });
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
 
     if (message.type === 'send-actions') {
-        sendToVSCode({ type: 'actions', actions: message.actions })
-            .then(sendResponse);
+        sendToVSCode({ type: 'actions', actions: message.actions }).then(sendResponse);
         return true;
     }
 
     if (message.type === 'send-raw-text') {
-        sendToVSCode({ type: 'raw-text', text: message.text })
-            .then(sendResponse);
+        sendToVSCode({ type: 'raw-text', text: message.text }).then(sendResponse);
         return true;
     }
 
@@ -81,7 +104,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === 'get-history') {
-        callVSCode('/get-history', {}).then((resp) => {
+        callVSCode('/get-history', {}).then(function(resp) {
             sendResponse({ history: resp.history || [] });
         });
         return true;
@@ -95,47 +118,48 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function sendToVSCode(payload) {
     try {
-        const baseUrl = await getServerUrl();
-        const endpoint = payload.type === 'raw-text' ? '/apply-text' : '/apply';
-        const response = await fetch(`${baseUrl}${endpoint}`, {
+        var baseUrl = await findServerUrl();
+        var endpoint = payload.type === 'raw-text' ? '/apply-text' : '/apply';
+        var response = await fetch(baseUrl + endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
         });
         if (!response.ok) {
-            return { success: false, message: `服务器返回错误: ${response.status}` };
+            return { success: false, message: '服务器返回错误: ' + response.status };
         }
-        const data = await response.json();
-        return { success: true, message: data.message || '已发送', data };
-    } catch {
+        var data = await response.json();
+        return { success: true, message: data.message || '已发送', data: data };
+    } catch (e) {
         return { success: false, message: 'VS Code 服务器未启动，请检查 VS Code 中的 AI Code Agent 扩展' };
     }
 }
 
-async function callVSCode(endpoint, body, method = 'POST') {
+async function callVSCode(endpoint, body, method) {
+    method = method || 'POST';
     try {
-        const baseUrl = await getServerUrl();
-        const options = method === 'GET'
+        var baseUrl = await findServerUrl();
+        var options = method === 'GET'
             ? { method: 'GET' }
             : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
-        const response = await fetch(`${baseUrl}${endpoint}`, options);
-        if (!response.ok) return { success: false, message: `错误: ${response.status}` };
+        var response = await fetch(baseUrl + endpoint, options);
+        if (!response.ok) return { success: false, message: '错误: ' + response.status };
         return await response.json();
-    } catch {
+    } catch (e) {
         return { success: false, message: '无法连接 VS Code 服务器' };
     }
 }
 
 async function checkConnection() {
     try {
-        const baseUrl = await getServerUrl();
-        const response = await fetch(`${baseUrl}/status`);
+        var baseUrl = await findServerUrl();
+        var response = await fetch(baseUrl + '/status');
         if (response.ok) {
-            const data = await response.json();
-            return { connected: true, workspace: data.workspace };
+            var data = await response.json();
+            return { connected: true, workspace: data.workspace, port: data.port };
         }
         return { connected: false };
-    } catch {
+    } catch (e) {
         return { connected: false };
     }
 }
