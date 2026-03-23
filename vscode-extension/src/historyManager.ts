@@ -44,25 +44,24 @@ export class HistoryManager {
         this.save();
     }
 
+    // [优化] 原子写入：先写 .tmp 再 rename，防止写入中途崩溃导致文件损坏
     private save() {
         try {
-            // 原子写入：先写临时文件再重命名，防止写入中途崩溃导致文件损坏
             const tmpFile = HISTORY_FILE + '.tmp';
             fs.writeFileSync(tmpFile, JSON.stringify(this.items), 'utf-8');
             fs.renameSync(tmpFile, HISTORY_FILE);
         } catch (_) {}
     }
 
+    // [优化] 加强容错：文件损坏时静默重置
     private load() {
         try {
             if (fs.existsSync(HISTORY_FILE)) {
                 const raw = fs.readFileSync(HISTORY_FILE, 'utf-8');
                 const parsed = JSON.parse(raw);
-                // 校验是否为数组，防止文件损坏时加载脏数据
                 this.items = Array.isArray(parsed) ? parsed : [];
             }
         } catch (_) {
-            // 文件损坏时静默重置，不影响插件正常运行
             this.items = [];
             try { fs.unlinkSync(HISTORY_FILE); } catch (_) {}
         }
