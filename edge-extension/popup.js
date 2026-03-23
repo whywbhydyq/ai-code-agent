@@ -73,7 +73,13 @@ document.addEventListener('DOMContentLoaded', function() {
         '5. 文件路径使用 / 分隔\n' +
         '6. 小文件（< 50 行）直接用 write，大文件用 patch\n\n' +
         '请确认你理解了以上格式要求。';
-
+    // [优化] 尝试从外部文件加载最新版提示词，成功则覆盖内联版本
+    try {
+        fetch(chrome.runtime.getURL('prompt-template.txt'))
+            .then(function(r) { return r.text(); })
+            .then(function(t) { if (t && t.trim().length > 50) PROMPT_TEMPLATE = t; })
+            .catch(function() {});
+    } catch (_) {}
     // ==================== 复制提示词 ====================
     btnCopyPrompt.addEventListener('click', function() {
         navigator.clipboard.writeText(PROMPT_TEMPLATE).then(function() {

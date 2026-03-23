@@ -155,7 +155,7 @@ export function applyPatches(
                         result.substring(fuzzyIdx.end);
                 } else {
                     throw new Error(
-                        `Patch 失败：找不到要替换的代码段\n查找: "${patch.find.substring(0, 80)}..."`
+                        `Patch failed: cannot find target code segment`
                     );
                 }
             }
@@ -173,7 +173,7 @@ export function applyPatches(
                     result.substring(actualPos);
             } else {
                 throw new Error(
-                    `Patch 失败：找不到插入锚点\n查找: "${patch.after.substring(0, 80)}..."`
+                    `Patch failed: cannot find insert anchor`
                 );
             }
         } else if (patch.before !== undefined && patch.insert !== undefined) {
@@ -186,7 +186,7 @@ export function applyPatches(
                     result.substring(idx);
             } else {
                 throw new Error(
-                    `Patch 失败：找不到插入锚点\n查找: "${patch.before.substring(0, 80)}..."`
+                    `Patch failed: cannot find insert anchor`
                 );
             }
         } else if (patch.delete !== undefined) {
@@ -203,7 +203,7 @@ export function applyPatches(
 }
 
 // ========================================================================
-// 模糊查找（[优化] 预计算行偏移，从 O(n²) 降到 O(n)）
+// 模糊查找（预计算行偏移，O(n) 替代 O(n^2)）
 // ========================================================================
 
 interface FuzzyResult {
@@ -234,7 +234,7 @@ function fuzzyFind(haystack: string, needle: string): FuzzyResult {
         .filter((l) => l.length > 0);
     const haystackLines = haystack.split('\n');
 
-    // [优化] 预计算每行起始偏移，避免匹配时重复 reduce
+    // 预计算每行起始偏移
     const lineOffsets: number[] = new Array(haystackLines.length + 1);
     lineOffsets[0] = 0;
     for (let k = 0; k < haystackLines.length; k++) {
@@ -264,42 +264,35 @@ function fuzzyFind(haystack: string, needle: string): FuzzyResult {
 }
 
 // ========================================================================
-// AI 偷懒检测
+// AI 偷懒检测（逐行检测 + 行首锚定，修复自检悖论）
 // ========================================================================
 
 export function detectLazyOutput(content: string): string[] {
     const warnings: string[] = [];
+    const lines = content.split('\n');
+    let lazyCount = 0;
 
-    const lazyPatterns: Array<{ regex: RegExp; desc: string }> = [
-        {
-            regex: /\/\/\s*\.{3}\s*(existing|rest|remaining|其余|省略|原有|不变)/gi,
-            desc: '// ... existing code ...',
-        },
-        {
-            regex: /#\s*\.{3}\s*(existing|rest|remaining|其余|省略|原有|不变)/gi,
-            desc: '# ... existing code ...',
-        },
-        {
-            regex: /\/\*\s*\.{3}\s*(existing|rest|remaining|其余|省略|原有|不变)[\s\S]*?\*\//gi,
-            desc: '/* ... existing code ... */',
-        },
-        {
-            regex: /\.{3}\s*(此处|这里|此部分|上述|以下|其他|前面|后面)\s*(省略|不变|保持|跳过|同上)/gi,
-            desc: '...省略...',
-        },
-        {
-            regex: /\/\/\s*(same|unchanged|omitted|keep|skip)/gi,
-            desc: '// same/unchanged',
-        },
-    ];
-
-    for (const pattern of lazyPatterns) {
-        const matches = content.match(pattern.regex);
-        if (matches && matches.length > 0) {
-            warnings.push(
-                `检测到 ${matches.length} 处省略标记：${pattern.desc}`
-            );
+    for (const line of lines) {
+        const trimmed = line.trim();
+        // 用 ^ 锚定行首，只检测独立的省略注释行
+        // 这样字符串常量、正则表达式中的关键词不会被误报
+        if (/^\/\/\s*\.{3}\s*(existing|rest|remaining|其余|省略|原有|不变)/i.test(trimmed)) {
+            lazyCount++;
+        } else if (/^#\s*\.{3}\s*(existing|rest|remaining|其余|省略|原有|不变)/i.test(trimmed)) {
+            lazyCount++;
+        } else if (/^\/\*\s*\.{3}\s*(existing|rest|remaining|其余|省略|原有|不变)/i.test(trimmed)) {
+            lazyCount++;
+        } else if (/^\/\/\s*(same|unchanged|omitted|keep|skip)\s*$/i.test(trimmed)) {
+            lazyCount++;
+        } else if (/^\.{3}\s*(此处|这里|此部分|上述|以下|其他|前面|后面)\s*(省略|不变|保持|跳过|同上)/i.test(trimmed)) {
+            lazyCount++;
         }
+    }
+
+    if (lazyCount > 0) {
+        warnings.push(
+            `detected ${lazyCount} lazy-output markers`
+        );
     }
 
     return warnings;
