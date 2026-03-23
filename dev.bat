@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 echo ========================================
 echo   AI Code Agent - 快速编译 + 安装
 echo ========================================
@@ -17,7 +18,6 @@ if errorlevel 1 (
 echo [2/3] 打包 VSIX...
 call npx vsce package --no-dependencies 2>nul
 if errorlevel 1 (
-    echo 打包失败，尝试安装 vsce...
     call npm install -g @vscode/vsce
     call npx vsce package --no-dependencies
 )
@@ -30,6 +30,6 @@ for %%f in (*.vsix) do (
 )
 
 echo.
-echo ✅ 完成！请在 VS Code 中按 Ctrl+Shift+P 输入 Reload Window
+echo 完成！在 VS Code 中按 Ctrl+Shift+P 输入 Reload Window
 echo.
 pause
