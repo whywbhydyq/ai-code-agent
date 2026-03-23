@@ -61,7 +61,7 @@
     function tryParseAndPush(str, arr) {
         var attempts = [
             str.trim(),
-            str.trim().replace(/,\s*([\]\}])/g, '$1'),
+            str.trim().replace(/,\s*([\]}])/g, '$1'),
             str.trim().replace(/'/g, '"'),
         ];
         for (var i = 0; i < attempts.length; i++) {
@@ -109,11 +109,11 @@
                 terminalCount++;
                 continue;
             }
-            if (/^\d+[\.\)\u3001]\s/.test(line)) {
+            if (/^\d+[\.)\u3001]\s/.test(line)) {
                 stepCount++;
                 continue;
             }
-            if (/[\u2192\-\>]/.test(line) && /[\u4e00-\u9fff]/.test(line)) {
+            if (/[\u2192\->]/.test(line) && /[\u4e00-\u9fff]/.test(line)) {
                 stepCount++;
                 continue;
             }
@@ -198,7 +198,7 @@
         var dismissBtn = document.createElement('button');
         dismissBtn.className = 'aca-dismiss-btn';
         dismissBtn.textContent = '\u00d7';
-        dismissBtn.title = '隐藏此按钮';
+        dismissBtn.title = '\u9690\u85cf\u6b64\u6309\u94ae';
         dismissBtn.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
@@ -208,7 +208,7 @@
 
         var btn = document.createElement('button');
         btn.className = BUTTON_CLASS;
-        btn.textContent = '\u26a1 应用到 VS Code (' + actions.length + ' 个文件)';
+        btn.textContent = '\u26a1 \u5e94\u7528\u5230 VS Code (' + actions.length + ' \u4e2a\u6587\u4ef6)';
         btn.title = actions.map(function(a) { return a.action + ': ' + a.file; }).join('\n');
 
         var status = document.createElement('span');
@@ -218,17 +218,17 @@
             e.preventDefault();
             e.stopPropagation();
             btn.disabled = true;
-            btn.textContent = '\u23f3 发送中...';
+            btn.textContent = '\u23f3 \u53d1\u9001\u4e2d...';
             sendToVSCode({ actions: actions }, function(response) {
                 if (response && response.success) {
-                    btn.textContent = '\u2705 已发送到 VS Code';
+                    btn.textContent = '\u2705 \u5df2\u53d1\u9001\u5230 VS Code';
                     btn.classList.add('aca-success');
                     status.textContent = response.message || '';
                 } else {
-                    btn.textContent = '\u274c 发送失败（点击重试）';
+                    btn.textContent = '\u274c \u53d1\u9001\u5931\u8d25\uff08\u70b9\u51fb\u91cd\u8bd5\uff09';
                     btn.classList.add('aca-error');
                     btn.disabled = false;
-                    status.textContent = response ? response.message : '无法连接 VS Code';
+                    status.textContent = response ? response.message : '\u65e0\u6cd5\u8fde\u63a5 VS Code';
                 }
             });
         });
@@ -265,10 +265,10 @@
             btn.textContent = '\u23f3 ...';
             sendToVSCode({ text: code }, function(response) {
                 if (response && response.success) {
-                    btn.textContent = '\u2705 已发送';
+                    btn.textContent = '\u2705 \u5df2\u53d1\u9001';
                     btn.classList.add('aca-success');
                 } else {
-                    btn.textContent = '\u274c 重试';
+                    btn.textContent = '\u274c \u91cd\u8bd5';
                     btn.classList.add('aca-error');
                     btn.disabled = false;
                 }
@@ -278,7 +278,7 @@
         var closeBtn = document.createElement('button');
         closeBtn.className = 'aca-manual-close-btn';
         closeBtn.textContent = '\u00d7';
-        closeBtn.title = '隐藏';
+        closeBtn.title = '\u9690\u85cf';
         closeBtn.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
@@ -351,35 +351,16 @@
     }
 
     // ======================== MutationObserver ========================
-    // [优化] 只在新增了 pre/code 相关节点时才触发扫描
     var scanTimeout = null;
     var observer = new MutationObserver(function(mutations) {
         if (!extensionEnabled || !autoScanEnabled) return;
-        var hasCodeNodes = false;
-        for (var mi = 0; mi < mutations.length; mi++) {
-            var added = mutations[mi].addedNodes;
-            for (var ni = 0; ni < added.length; ni++) {
-                var node = added[ni];
-                if (node.nodeType !== 1) continue;
-                var tagName = node.tagName;
-                if (tagName === 'PRE' || tagName === 'CODE') {
-                    hasCodeNodes = true;
-                    break;
-                }
-                if (node.querySelector && node.querySelector('pre, code')) {
-                    hasCodeNodes = true;
-                    break;
-                }
-            }
-            if (hasCodeNodes) break;
-        }
-        if (!hasCodeNodes) return;
+        var hasNewNodes = mutations.some(function(m) { return m.addedNodes.length > 0; });
+        if (!hasNewNodes) return;
         if (scanTimeout) clearTimeout(scanTimeout);
         scanTimeout = setTimeout(scanPage, 800);
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // ======================== 选中文本浮动按钮 ========================
     var floatingContainer = null;
     var floatingTimeout = null;
 
@@ -416,7 +397,6 @@
 
             var range = selection.getRangeAt(0);
             var rect = range.getBoundingClientRect();
-            // [优化] 防止按钮超出视口底部
             var btnTop = Math.max(rect.top - 44, 8);
             if (btnTop + 40 > window.innerHeight) {
                 btnTop = Math.max(window.innerHeight - 50, 8);
@@ -430,21 +410,21 @@
 
             var sendBtn = document.createElement('button');
             sendBtn.className = 'aca-floating-send-btn';
-            sendBtn.textContent = '\ud83d\udce4 发送到 VS Code';
+            sendBtn.textContent = '\ud83d\udce4 \u53d1\u9001\u5230 VS Code';
 
             sendBtn.addEventListener('click', function(ev) {
                 ev.preventDefault();
                 ev.stopPropagation();
                 var actions = extractActions(text);
-                sendBtn.textContent = '\u23f3 发送中...';
+                sendBtn.textContent = '\u23f3 \u53d1\u9001\u4e2d...';
                 sendBtn.disabled = true;
 
                 if (actions.length > 0) {
                     sendToVSCode({ actions: actions }, function(resp) {
                         showNotification(
                             resp && resp.success
-                                ? '\u2705 已发送 ' + actions.length + ' 个操作到 VS Code'
-                                : (resp ? resp.message : '连接失败'),
+                                ? '\u2705 \u5df2\u53d1\u9001 ' + actions.length + ' \u4e2a\u64cd\u4f5c\u5230 VS Code'
+                                : (resp ? resp.message : '\u8fde\u63a5\u5931\u8d25'),
                             resp && resp.success
                         );
                         removeFloatingBtn();
@@ -453,8 +433,8 @@
                     sendToVSCode({ text: text }, function(resp) {
                         showNotification(
                             resp && resp.success
-                                ? '\u2705 已发送（请在 VS Code 中指定文件路径）'
-                                : (resp ? resp.message : '连接失败'),
+                                ? '\u2705 \u5df2\u53d1\u9001\uff08\u8bf7\u5728 VS Code \u4e2d\u6307\u5b9a\u6587\u4ef6\u8def\u5f84\uff09'
+                                : (resp ? resp.message : '\u8fde\u63a5\u5931\u8d25'),
                             resp && resp.success
                         );
                         removeFloatingBtn();
@@ -465,7 +445,7 @@
             var closeBtn = document.createElement('button');
             closeBtn.className = 'aca-floating-close-btn';
             closeBtn.textContent = '\u00d7';
-            closeBtn.title = '关闭 (Esc)';
+            closeBtn.title = '\u5173\u95ed (Esc)';
             closeBtn.addEventListener('click', function(ev) {
                 ev.preventDefault();
                 ev.stopPropagation();
@@ -484,7 +464,6 @@
         if (floatingContainer && !floatingContainer.contains(e.target)) removeFloatingBtn();
     });
 
-    // ======================== 开关控制 ========================
     function disableExtension() {
         extensionEnabled = false;
         removeFloatingBtn();
@@ -505,6 +484,14 @@
     }
 
     chrome.runtime.onMessage.addListener(function(message) {
+                if (message.type === 'scan-page-only') {
+            if (!extensionEnabled) return;
+            // 只扫描显示按钮，不发送
+            autoScanEnabled = true;
+            scanPage();
+            showNotification('已扫描页面，按钮已显示在代码块旁', true);
+            return;
+        }
         if (message.type === 'scan-and-send-all') {
             if (!extensionEnabled) return;
             var allActions = [];
@@ -512,14 +499,14 @@
                 extractActions(el.textContent || '').forEach(function(a) { allActions.push(a); });
             });
             if (allActions.length === 0) {
-                showNotification('未检测到可用的代码操作指令', false);
+                showNotification('\u672a\u68c0\u6d4b\u5230\u53ef\u7528\u7684\u4ee3\u7801\u64cd\u4f5c\u6307\u4ee4', false);
                 return;
             }
             sendToVSCode({ actions: allActions }, function(resp) {
                 showNotification(
                     resp && resp.success
-                        ? '已发送 ' + allActions.length + ' 个操作到 VS Code'
-                        : (resp ? resp.message : '连接失败'),
+                        ? '\u5df2\u53d1\u9001 ' + allActions.length + ' \u4e2a\u64cd\u4f5c\u5230 VS Code'
+                        : (resp ? resp.message : '\u8fde\u63a5\u5931\u8d25'),
                     resp && resp.success
                 );
             });
@@ -551,7 +538,7 @@
         }, 3000);
     }
 
-    console.log('[AI Code Agent] Content script loaded. v1.1.0');
+    console.log('[AI Code Agent] Content script loaded. v1.2.0');
 
     // ======================== WebSocket ========================
     var ws = null;
@@ -568,7 +555,7 @@
             try {
                 ws = new WebSocket('ws://127.0.0.1:' + port + '/ws');
                 ws.onopen = function() {
-                    console.log('[AI Code Agent] WebSocket 已连接');
+                    console.log('[AI Code Agent] WebSocket connected');
                     wsRetryDelay = 1000;
                     if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
                 };
@@ -612,7 +599,7 @@
             data.reqId = reqId;
             var timeout = setTimeout(function() {
                 pendingRequests.delete(reqId);
-                resolve({ success: false, message: '请求超时' });
+                resolve({ success: false, message: 'timeout' });
             }, 10000);
             pendingRequests.set(reqId, function(resp) {
                 clearTimeout(timeout);
@@ -622,7 +609,7 @@
             if (!wsSend(data)) {
                 clearTimeout(timeout);
                 pendingRequests.delete(reqId);
-                resolve({ success: false, message: '未连接到 VS Code' });
+                resolve({ success: false, message: 'not connected' });
             }
         });
     }
@@ -635,19 +622,19 @@
 
         switch (data.type) {
             case 'connected':
-                console.log('[AI Code Agent] VS Code 工作区:', data.workspace);
+                console.log('[AI Code Agent] VS Code workspace:', data.workspace);
                 break;
             case 'inject-to-input':
                 injectToAIInput(data.message);
                 showNotification(
                     data.mode === 'error'
-                        ? '\u2705 错误信息已注入到 AI 输入框'
-                        : '\u2705 已注入 ' + (data.mode === 'file' ? '文件' : '选中代码') + ' 到 AI 输入框',
+                        ? '\u2705 \u9519\u8bef\u4fe1\u606f\u5df2\u6ce8\u5165\u5230 AI \u8f93\u5165\u6846'
+                        : '\u2705 \u5df2\u6ce8\u5165 ' + (data.mode === 'file' ? '\u6587\u4ef6' : '\u9009\u4e2d\u4ee3\u7801') + ' \u5230 AI \u8f93\u5165\u6846',
                     true
                 );
                 break;
             case 'progress':
-                showNotification('\u23f3 处理中 [' + data.current + '/' + data.total + ']: ' + data.file, true);
+                showNotification('\u23f3 [' + data.current + '/' + data.total + ']: ' + data.file, true);
                 break;
             case 'done':
                 showNotification('\ud83c\udf89 ' + data.summary, true);
@@ -661,8 +648,8 @@
     function injectToAIInput(text) {
         var selectors = [
             'textarea[placeholder*="message" i]',
-            'textarea[placeholder*="消息" i]',
-            'textarea[placeholder*="输入" i]',
+            'textarea[placeholder*="\u6d88\u606f" i]',
+            'textarea[placeholder*="\u8f93\u5165" i]',
             'div[contenteditable="true"][role="textbox"]',
             'div[contenteditable="true"]',
             'textarea',
@@ -673,7 +660,7 @@
             if (el) { target = el; break; }
         }
         if (!target) {
-            showNotification('\u274c 未找到 AI 输入框，请手动粘贴', false);
+            showNotification('\u274c \u672a\u627e\u5230 AI \u8f93\u5165\u6846\uff0c\u8bf7\u624b\u52a8\u7c98\u8d34', false);
             navigator.clipboard.writeText(text).catch(function() {});
             return;
         }
