@@ -20,6 +20,23 @@ import {
 
 const TEMP_DIR = path.join(os.tmpdir(), 'ai-code-agent-diff');
 
+// Clean up old temp files on module load
+try {
+  if (fs.existsSync(TEMP_DIR)) {
+    const files = fs.readdirSync(TEMP_DIR);
+    const now = Date.now();
+    for (const file of files) {
+      const filePath = path.join(TEMP_DIR, file);
+      try {
+        const stat = fs.statSync(filePath);
+        if (now - stat.mtimeMs > 3600000) { // 1 hour old
+          fs.unlinkSync(filePath);
+        }
+      } catch (_) {}
+    }
+  }
+} catch (_) {}
+
 // 用于「全部接受」状态
 let acceptAllMode = false;
 let rejectAllMode = false;
