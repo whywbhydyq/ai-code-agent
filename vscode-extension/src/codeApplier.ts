@@ -237,28 +237,28 @@ function fuzzyFind(haystack: string, needle: string): FuzzyResult {
         .filter((l) => l.length > 0);
     const haystackLines = haystack.split('\n');
 
+    // 预计算每行起始偏移，避免在每次匹配时重复 reduce，从 O(n²) 降到 O(n)
+    const lineOffsets: number[] = new Array(haystackLines.length + 1);
+    lineOffsets[0] = 0;
+    for (let k = 0; k < haystackLines.length; k++) {
+        lineOffsets[k + 1] = lineOffsets[k] + haystackLines[k].length + 1;
+    }
+
     for (let i = 0; i < haystackLines.length; i++) {
-        if (haystackLines[i].trim() === needleLines[0]) {
-            let allMatch = true;
-            for (let j = 1; j < needleLines.length; j++) {
-                if (
-                    i + j >= haystackLines.length ||
-                    haystackLines[i + j].trim() !== needleLines[j]
-                ) {
-                    allMatch = false;
-                    break;
-                }
+        if (haystackLines[i].trim() !== needleLines[0]) continue;
+        if (i + needleLines.length > haystackLines.length) continue;
+        let allMatch = true;
+        for (let j = 1; j < needleLines.length; j++) {
+            if (haystackLines[i + j].trim() !== needleLines[j]) {
+                allMatch = false;
+                break;
             }
-            if (allMatch) {
-                origStart = haystackLines
-                    .slice(0, i)
-                    .reduce((sum, l) => sum + l.length + 1, 0);
-                const endLine = i + needleLines.length - 1;
-                origEnd = haystackLines
-                    .slice(0, endLine + 1)
-                    .reduce((sum, l) => sum + l.length + 1, 0);
-                return { start: origStart, end: origEnd };
-            }
+        }
+        if (allMatch) {
+            return {
+                start: lineOffsets[i],
+                end: lineOffsets[i + needleLines.length]
+            };
         }
     }
 
