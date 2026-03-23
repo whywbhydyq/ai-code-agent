@@ -16,12 +16,12 @@ const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_PORT_TRIES = 10;
 
 interface WSClient {
-    socket: import('net').Socket;
-    id: string;
-    alive: boolean;
-    buffer: Buffer;
+  socket: import('net').Socket;
+  id: string;
+  alive: boolean;
+  buffer: Buffer;
+  fragmentBuffer: Buffer;
 }
-
 export class AgentServer {
     private httpServer: http.Server | null = null;
     private wsClients: Map<string, WSClient> = new Map();
@@ -130,7 +130,7 @@ public history: HistoryManager;
         );
 
         const id = Math.random().toString(36).slice(2);
-        const client: WSClient = { socket, id, alive: true, buffer: Buffer.alloc(0) };
+        const client: WSClient = { socket, id, alive: true, buffer: Buffer.alloc(0), fragmentBuffer: Buffer.alloc(0) };
         this.wsClients.set(id, client);
         this.log.appendLine(`[WS] 客户端连接: ${id} (共 ${this.wsClients.size} 个)`);
 
