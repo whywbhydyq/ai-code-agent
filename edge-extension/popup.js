@@ -220,6 +220,30 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
+    // 重新加载当前页面（刷新后重新扫描）
+    var btnReloadPage = document.getElementById('btn-reload-page');
+    if (btnReloadPage) {
+        btnReloadPage.addEventListener('click', function() {
+            chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+                if (tabs[0]) {
+                    chrome.tabs.reload(tabs[0].id);
+                    showResult('页面已刷新', true);
+                }
+            });
+        });
+    }
+
+    // 重载浏览器插件本身
+    var btnReloadExt = document.getElementById('btn-reload-ext');
+    if (btnReloadExt) {
+        btnReloadExt.addEventListener('click', function() {
+            showResult('插件重载中...', true);
+            setTimeout(function() {
+                chrome.runtime.reload();
+            }, 500);
+        });
+    }
+
     // ==================== 项目路径 ====================
     function getSavedProjects(callback) {
         chrome.storage.local.get(['savedProjects'], function(r) { callback(r.savedProjects || []); });
