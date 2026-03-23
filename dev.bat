@@ -1,35 +1,35 @@
 @echo off
-chcp 65001 >nul
 echo ========================================
-echo   AI Code Agent - 快速编译 + 安装
+echo   AI Code Agent - Build and Install
 echo ========================================
 echo.
 
 cd /d "%~dp0vscode-extension"
 
-echo [1/3] 编译 TypeScript...
+echo [1/3] Compiling TypeScript...
 call npm run compile
 if errorlevel 1 (
-    echo 编译失败！
+    echo Compile FAILED!
     pause
     exit /b 1
 )
 
-echo [2/3] 打包 VSIX...
+echo [2/3] Packaging VSIX...
 call npx vsce package --no-dependencies 2>nul
 if errorlevel 1 (
+    echo Installing vsce...
     call npm install -g @vscode/vsce
     call npx vsce package --no-dependencies
 )
 
-echo [3/3] 安装到 VS Code...
+echo [3/3] Installing to VS Code...
 for %%f in (*.vsix) do (
-    echo 安装 %%f ...
+    echo Installing %%f ...
     code --install-extension "%%f" --force
     del "%%f"
 )
 
 echo.
-echo 完成！在 VS Code 中按 Ctrl+Shift+P 输入 Reload Window
+echo Done! Press Ctrl+Shift+P in VS Code, type Reload Window
 echo.
 pause
