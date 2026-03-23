@@ -34,9 +34,19 @@ export function activate(context: vscode.ExtensionContext) {
         server = new AgentServer(basePort, outputChannel);
 
         try {
-const actualPort = await server.start();
-      updateStatusBar(true, actualPort, 0);
-      server.onClientCountChange = (count) => updateStatusBar(true, actualPort, count);
+            const actualPort = await server.start();
+            updateStatusBar(true, actualPort, 0);
+
+            // [优化] 每5秒同步WS客户端数到状态栏
+            const wsCountTimer = setInterval(() => {
+                if (server) {
+                    updateStatusBar(true, actualPort, server.getClientCount());
+                } else {
+                    clearInterval(wsCountTimer);
+                }
+            }, 5000);
+            context.subscriptions.push({ dispose: () => clearInterval(wsCountTimer) });
+
             if (actualPort !== basePort) {
                 vscode.window.showInformationMessage(
                     `AI Code Agent 已启动（端口 ${basePort} 被占用，使用 ${actualPort}）`
