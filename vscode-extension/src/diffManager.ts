@@ -5,8 +5,8 @@
  * - 新增「全部接受」选项，批量操作时不用逐个确认
  * - 敏感文件正则精确匹配
  * - 新建文件时自动创建目录
+ * - [新增] 启动时自动清理超过1小时的旧临时文件
  */
-
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -20,24 +20,22 @@ import {
 
 const TEMP_DIR = path.join(os.tmpdir(), 'ai-code-agent-diff');
 
-// Clean up old temp files on module load
-try {
-  if (fs.existsSync(TEMP_DIR)) {
-    const files = fs.readdirSync(TEMP_DIR);
-    const now = Date.now();
-    for (const file of files) {
-      const filePath = path.join(TEMP_DIR, file);
-      try {
-        const stat = fs.statSync(filePath);
-        if (now - stat.mtimeMs > 3600000) { // 1 hour old
-          fs.unlinkSync(filePath);
+// [优化] 模块加载时清理超过1小时的旧临时文件，防止磁盘泄漏
+(function cleanupOldTempFiles() {
+    try {
+        if (!fs.existsSync(TEMP_DIR)) return;
+        const now = Date.now();
+        for (const file of fs.readdirSync(TEMP_DIR)) {
+            try {
+                const fp = path.join(TEMP_DIR, file);
+                if (now - fs.statSync(fp).mtimeMs > 3_600_000) {
+                    fs.unlinkSync(fp);
+                }
+            } catch (_) {}
         }
-      } catch (_) {}
-    }
-  }
-} catch (_) {}
+    } catch (_) {}
+})();
 
-// 用于「全部接受」状态
 let acceptAllMode = false;
 let rejectAllMode = false;
 
@@ -64,7 +62,6 @@ export async function processAction(
         throw new Error(`安全拦截：路径越界 → ${action.file}`);
     }
 
-    // 精确匹配敏感文件
     const dangerousPatterns: Array<{ pattern: RegExp; desc: string }> = [
         { pattern: /(?:^|[\/\\])\.env(?:\.|$)/i, desc: '.env 文件' },
         { pattern: /(?:^|[\/\\])\.git[\/\\]/i, desc: '.git 目录' },
@@ -72,6 +69,7 @@ export async function processAction(
         { pattern: /(?:^|[\/\\])\.ssh[\/\\]/i, desc: '.ssh 目录' },
         { pattern: /(?:^|[\/\\])id_rsa/i, desc: 'SSH 私钥' },
     ];
+
     for (const { pattern, desc } of dangerousPatterns) {
         if (pattern.test(action.file)) {
             throw new Error(`安全拦截：禁止修改${desc} → ${action.file}`);
@@ -80,21 +78,20 @@ export async function processAction(
 
     log.appendLine(`[DiffManager] Processing: ${action.action} → ${action.file}`);
 
-    // ==================== 删除 ====================
     if (action.action === 'delete') {
         if (!fs.existsSync(fullPath)) {
-            return `⏭️ ${action.file}: 文件不存在，跳过删除`;
+            return `⏭ ${action.file}: 文件不存在，跳过删除`;
         }
 
         if (!acceptAllMode) {
             const confirm = await vscode.window.showWarningMessage(
                 `确认删除文件 ${action.file}？`,
                 { modal: true },
-                '🗑️ 确认删除',
+                '🗑 确认删除',
                 '取消'
             );
-            if (confirm !== '🗑️ 确认删除') {
-                return `⏭️ ${action.file}: 用户取消删除`;
+            if (confirm !== '🗑 确认删除') {
+                return `⏭ ${action.file}: 用户取消删除`;
             }
         }
 
@@ -104,7 +101,6 @@ export async function processAction(
         return `✅ ${action.file}: 已删除`;
     }
 
-    // ==================== 写入/补丁 ====================
     let originalContent = '';
     const fileExists = fs.existsSync(fullPath);
     if (fileExists) {
@@ -121,31 +117,28 @@ export async function processAction(
         newContent = action.content;
     }
 
-    // 偷懒检测
     const lazyWarnings = detectLazyOutput(newContent);
     if (lazyWarnings.length > 0 && !acceptAllMode) {
         const warningMsg = lazyWarnings.join('\n');
         const choice = await vscode.window.showWarningMessage(
-            `⚠️ AI 输出中包含省略标记：\n${warningMsg}\n\n直接应用可能导致代码丢失。`,
+            `⚠ AI 输出中包含省略标记：\n${warningMsg}\n\n直接应用可能导致代码丢失。`,
             { modal: true },
             '仍然应用（我知道风险）',
             '放弃'
         );
         if (choice !== '仍然应用（我知道风险）') {
-            return `⏭️ ${action.file}: 检测到省略标记，用户放弃`;
+            return `⏭ ${action.file}: 检测到省略标记，用户放弃`;
         }
     }
 
     if (originalContent === newContent) {
-        return `⏭️ ${action.file}: 内容无变化`;
+        return `⏭ ${action.file}: 内容无变化`;
     }
 
-    // 如果已经选了「全部拒绝」
     if (rejectAllMode) {
-        return `⏭️ ${action.file}: 用户选择全部拒绝`;
+        return `⏭ ${action.file}: 用户选择全部拒绝`;
     }
 
-    // ==================== 确认逻辑 ====================
     const requireConfirmation = vscode.workspace
         .getConfiguration('aiCodeAgent')
         .get<boolean>('requireConfirmation', true);
@@ -160,18 +153,17 @@ export async function processAction(
         );
 
         if (accepted === 'reject') {
-            return `⏭️ ${action.file}: 用户拒绝`;
+            return `⏭ ${action.file}: 用户拒绝`;
         }
         if (accepted === 'accept-all') {
             acceptAllMode = true;
         }
         if (accepted === 'reject-all') {
             rejectAllMode = true;
-            return `⏭️ ${action.file}: 用户选择全部拒绝`;
+            return `⏭ ${action.file}: 用户选择全部拒绝`;
         }
     }
 
-    // ==================== 写入文件 ====================
     const autoGit = vscode.workspace
         .getConfiguration('aiCodeAgent')
         .get<boolean>('autoGitSnapshot', true);
@@ -194,7 +186,7 @@ export async function processAction(
 }
 
 // ========================================================================
-// Diff 预览（返回 accept / accept-all / reject / reject-all）
+// Diff 预览
 // ========================================================================
 
 type DiffChoice = 'accept' | 'accept-all' | 'reject' | 'reject-all';
@@ -243,7 +235,7 @@ async function showDiffAndConfirm(
         case '✅ 接受':     return 'accept';
         case '✅ 全部接受': return 'accept-all';
         case '❌ 全部拒绝': return 'reject-all';
-        default:            return 'reject';
+        default:             return 'reject';
     }
 
     function cleanup() {
