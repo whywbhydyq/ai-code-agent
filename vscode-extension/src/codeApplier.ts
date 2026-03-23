@@ -80,7 +80,7 @@ export function parseActionsFromText(text: string): AgentAction[] {
 }
 
 // ========================================================================
-// JSON 解析
+// JSON 安全解析
 // ========================================================================
 
 function safeJsonParse(text: string): any | null {
@@ -91,7 +91,7 @@ function safeJsonParse(text: string): any | null {
     } catch (_) {}
 
     try {
-        const fixed = trimmed.replace(/,\s*([\]}])/g, '$1');
+        const fixed = trimmed.replace(/,\s*([\]\}])/g, '$1');
         return JSON.parse(fixed);
     } catch (_) {}
 
@@ -129,7 +129,7 @@ function normalizeAction(obj: any): AgentAction {
 }
 
 // ========================================================================
-// Patch 应用
+// Patch 引擎
 // ========================================================================
 
 export function applyPatches(
@@ -203,7 +203,7 @@ export function applyPatches(
 }
 
 // ========================================================================
-// 模糊查找
+// 模糊查找（[优化] 预计算行偏移，从 O(n²) 降到 O(n)）
 // ========================================================================
 
 interface FuzzyResult {
@@ -228,16 +228,13 @@ function fuzzyFind(haystack: string, needle: string): FuzzyResult {
         return { start: -1, end: -1 };
     }
 
-    let origStart = -1;
-    let origEnd = -1;
-
     const needleLines = needle
         .split('\n')
         .map((l) => l.trim())
         .filter((l) => l.length > 0);
     const haystackLines = haystack.split('\n');
 
-    // 预计算每行起始偏移，避免在每次匹配时重复 reduce，从 O(n²) 降到 O(n)
+    // [优化] 预计算每行起始偏移，避免匹配时重复 reduce
     const lineOffsets: number[] = new Array(haystackLines.length + 1);
     lineOffsets[0] = 0;
     for (let k = 0; k < haystackLines.length; k++) {
@@ -247,6 +244,7 @@ function fuzzyFind(haystack: string, needle: string): FuzzyResult {
     for (let i = 0; i < haystackLines.length; i++) {
         if (haystackLines[i].trim() !== needleLines[0]) continue;
         if (i + needleLines.length > haystackLines.length) continue;
+
         let allMatch = true;
         for (let j = 1; j < needleLines.length; j++) {
             if (haystackLines[i + j].trim() !== needleLines[j]) {
@@ -257,7 +255,7 @@ function fuzzyFind(haystack: string, needle: string): FuzzyResult {
         if (allMatch) {
             return {
                 start: lineOffsets[i],
-                end: lineOffsets[i + needleLines.length]
+                end: lineOffsets[i + needleLines.length],
             };
         }
     }
@@ -266,7 +264,7 @@ function fuzzyFind(haystack: string, needle: string): FuzzyResult {
 }
 
 // ========================================================================
-// 偷懒检测
+// AI 偷懒检测
 // ========================================================================
 
 export function detectLazyOutput(content: string): string[] {
