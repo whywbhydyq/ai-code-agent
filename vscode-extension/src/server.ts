@@ -1,13 +1,5 @@
 /**
  * AI Code Agent - 服务器（HTTP + WebSocket 双协议）
- *
- * 优化：
- * - WebSocket 握手从 req.headers 读取
- * - 帧缓冲处理 TCP 分片
- * - 补全 /get-history /clear-history
- * - HTTP body 大小限制
- * - 批量操作前重置 acceptAll 状态
- * - 操作结果通知显示具体文件名
  */
 
 import * as http from 'http';
@@ -234,8 +226,9 @@ export class AgentServer {
                     this.sendToClient(client, { type: 'ack', reqId: cmd.reqId, message: `解析到 ${actions.length} 个操作` });
                     this.processActionsAsync(actions, client);
                 } else {
-                    await this.handleManualCode(cmd.text || '');
-                    this.sendToClient(client, { type: 'ack', reqId: cmd.reqId, message: '未识别到结构化操作，已在 VS Code 中打开' });
+                    // 不等待用户交互，先响应再处理
+                    this.sendToClient(client, { type: 'ack', reqId: cmd.reqId, success: true, message: '已在 VS Code 中打开，请指定文件路径' });
+                    this.handleManualCode(cmd.text || '');
                 }
                 break;
             }
@@ -410,8 +403,10 @@ export class AgentServer {
                     this.processActionsAsync(actions, null);
                     json({ status: 'success', message: `解析到 ${actions.length} 个操作` });
                 } else {
-                    await this.handleManualCode(text);
-                    json({ status: 'success', message: '已在 VS Code 中打开' });
+                    // 关键修复：先响应 HTTP，再在后台处理
+                    // 不用 await，让 HTTP 立即返回
+                    json({ status: 'success', message: '已在 VS Code 中打开，请查看 VS Code 窗口' });
+                    this.handleManualCode(text);
                 }
                 return;
             }
@@ -447,11 +442,10 @@ export class AgentServer {
     }
 
     // ======================================================================
-    // 操作处理（每批次重置 acceptAll 状态）
+    // 操作处理
     // ======================================================================
 
     private async processActionsAsync(actions: AgentAction[], client: WSClient | null) {
-        // 每次新批次重置
         resetBatchMode();
 
         const results: Array<{ file: string; result: string; accepted: boolean }> = [];
@@ -502,7 +496,6 @@ export class AgentServer {
             }
         }
 
-        // 生成详细摘要
         const acceptedFiles = results.filter((r) => r.accepted).map((r) => r.file);
         const failedFiles = results.filter((r) => r.result.startsWith('❌')).map((r) => r.file);
         const skippedCount = results.length - acceptedFiles.length - failedFiles.length;
@@ -511,7 +504,6 @@ export class AgentServer {
         if (skippedCount > 0) summary += ` ⏭️${skippedCount} 跳过`;
         if (failedFiles.length > 0) summary += ` ❌${failedFiles.length} 失败`;
 
-        // 详细文件名通知
         if (acceptedFiles.length > 0 && acceptedFiles.length <= 5) {
             summary += '\n✅ ' + acceptedFiles.join(', ');
         }
