@@ -34,9 +34,9 @@ export function activate(context: vscode.ExtensionContext) {
         server = new AgentServer(basePort, outputChannel);
 
         try {
-            const actualPort = await server.start();
-            updateStatusBar(true, actualPort, 0);
-
+const actualPort = await server.start();
+      updateStatusBar(true, actualPort, 0);
+      server.onClientCountChange = (count) => updateStatusBar(true, actualPort, count);
             if (actualPort !== basePort) {
                 vscode.window.showInformationMessage(
                     `AI Code Agent 已启动（端口 ${basePort} 被占用，使用 ${actualPort}）`
