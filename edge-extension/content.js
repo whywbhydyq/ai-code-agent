@@ -22,11 +22,8 @@
         }
     });
 
-    // 监听设置变化
     chrome.storage.onChanged.addListener(function(changes) {
-        if (changes.autoJump) {
-            autoJumpEnabled = changes.autoJump.newValue !== false;
-        }
+        if (changes.autoJump) autoJumpEnabled = changes.autoJump.newValue !== false;
     });
 
     // ======================== 解析 ========================
@@ -103,39 +100,27 @@
         var lines = trimmed.split('\n');
         var nonEmptyLines = lines.filter(function(l) { return l.trim().length > 0; });
 
-        // 少于 3 行不加按钮
         if (nonEmptyLines.length < 3) return true;
-
-        // 少于 80 字符不加按钮
         if (trimmed.length < 80) return true;
 
-        // 检测终端命令行
         var terminalCount = 0;
         var stepCount = 0;
         var naturalLangCount = 0;
 
         for (var i = 0; i < nonEmptyLines.length; i++) {
             var line = nonEmptyLines[i].trim();
-
-            // 终端提示符
             if (/^[$>]\s/.test(line) || /^PS\s/.test(line) || /^C:\\/.test(line)) {
                 terminalCount++;
                 continue;
             }
-
-            // 序号步骤（1. 2. 3.）
             if (/^\d+[\.\)、]\s/.test(line)) {
                 stepCount++;
                 continue;
             }
-
-            // 包含箭头的步骤说明
             if (/[→\->]/.test(line) && /[\u4e00-\u9fff]/.test(line)) {
                 stepCount++;
                 continue;
             }
-
-            // 中文自然语言为主的行（中文字符占比超过 30%）
             var chineseChars = (line.match(/[\u4e00-\u9fff]/g) || []).length;
             if (chineseChars > line.length * 0.3 && line.length > 5) {
                 naturalLangCount++;
@@ -143,16 +128,10 @@
             }
         }
 
-        // 60% 以上是终端命令
         if (terminalCount / nonEmptyLines.length > 0.6) return true;
-
-        // 50% 以上是步骤说明
         if (stepCount / nonEmptyLines.length > 0.5) return true;
-
-        // 50% 以上是自然语言
         if (naturalLangCount / nonEmptyLines.length > 0.5) return true;
 
-        // 常见命令关键词占多数
         var cmdRegex = /^(cd|ls|dir|mkdir|rm|cp|mv|cat|echo|npm|npx|yarn|pnpm|git|pip|python|node|cargo|go |docker|kubectl|brew|apt|sudo|chmod|chown|curl|wget|code|vsce)\s/i;
         var cmdCount = 0;
         for (var j = 0; j < nonEmptyLines.length; j++) {
@@ -163,17 +142,50 @@
         return false;
     }
 
-    // ======================== 自动跳转 VS Code ========================
+    // 判断元素是否是代码块的标题/标签栏（如 "agent-action", "bash", "json" 等）
+    function isCodeBlockHeader(el) {
+        // 太短的元素（标题通常只有一个词）
+        var text = (el.textContent || '').trim();
+        if (text.length < 30) return true;
+
+        // 只有一行
+        if (text.split('\n').filter(function(l) { return l.trim(); }).length <= 1) return true;
+
+        // 常见代码块标题 class
+        var cls = (el.className || '').toLowerCase();
+        if (/lang|language|header|title|label|tag|badge|toolbar|copy/.test(cls)) return true;
+
+        // span/button/small 这些标签通常是标题
+        var tag = el.tagName;
+        if (tag === 'SPAN' || tag === 'BUTTON' || tag === 'SMALL' || tag === 'LABEL') return true;
+
+        return false;
+    }
+
+    // 判断元素是否已经有祖先被处理过
+    function hasProcessedAncestor(el) {
+        var parent = el.parentElement;
+        while (parent) {
+            if (parent.getAttribute(PROCESSED_ATTR)) return true;
+            // 如果父元素已经有 aca-button-wrapper 作为子元素
+            if (parent.querySelector('.aca-button-wrapper')) return true;
+            parent = parent.parentElement;
+        }
+        return false;
+    }
+
+    // ======================== 自动跳转 ========================
 
     function jumpToVSCode() {
         if (!autoJumpEnabled) return;
-        // 使用 VS Code 的 protocol URL 激活窗口
-        var a = document.createElement('a');
-        a.href = 'vscode://file';
-        a.style.display = 'none';
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(function() { a.remove(); }, 100);
+        chrome.storage.local.get(['serverPort'], function(r) {
+            var port = r.serverPort || 9960;
+            fetch('http://127.0.0.1:' + port + '/focus', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            }).catch(function() {});
+        });
     }
 
     // ======================== 通信 ========================
@@ -184,7 +196,6 @@
                 ? { type: 'send-actions', actions: payload.actions }
                 : { type: 'send-raw-text', text: payload.text },
             function(response) {
-                // 发送成功后自动跳转
                 if (response && response.success) {
                     jumpToVSCode();
                 }
@@ -193,12 +204,17 @@
         );
     }
 
-    // ======================== Apply 按钮 ========================
+    // ======================== Apply 按钮（修复：不挤开正文） ========================
 
     function addApplyButton(element, actions) {
         if (element.getAttribute(PROCESSED_ATTR)) return;
         element.setAttribute(PROCESSED_ATTR, 'true');
 
+        // 找到合适的插入容器：pre 或 代码块的父容器
+        var container = element.closest('pre') || element;
+        container.style.position = 'relative';
+
+        // 按钮容器（绝对定位在代码块底部，不占文档流）
         var wrapper = document.createElement('div');
         wrapper.className = 'aca-button-wrapper';
 
@@ -215,18 +231,8 @@
 
         var btn = document.createElement('button');
         btn.className = BUTTON_CLASS;
-        btn.innerHTML = '⚡ 应用到 VS Code (' + actions.length + ' 个文件)';
+        btn.textContent = '⚡ 应用到 VS Code (' + actions.length + ' 个文件)';
         btn.title = actions.map(function(a) { return a.action + ': ' + a.file; }).join('\n');
-
-        var preview = document.createElement('div');
-        preview.className = 'aca-preview';
-        actions.forEach(function(a) {
-            var item = document.createElement('div');
-            item.className = 'aca-preview-item';
-            var icon = a.action === 'delete' ? '🗑️' : a.action === 'patch' ? '🔧' : '📄';
-            item.textContent = icon + ' ' + a.action + ' → ' + a.file;
-            preview.appendChild(item);
-        });
 
         var status = document.createElement('span');
         status.className = 'aca-status';
@@ -235,14 +241,14 @@
             e.preventDefault();
             e.stopPropagation();
             btn.disabled = true;
-            btn.innerHTML = '⏳ 发送中...';
+            btn.textContent = '⏳ 发送中...';
             sendToVSCode({ actions: actions }, function(response) {
                 if (response && response.success) {
-                    btn.innerHTML = '✅ 已发送到 VS Code';
+                    btn.textContent = '✅ 已发送到 VS Code';
                     btn.classList.add('aca-success');
                     status.textContent = response.message || '';
                 } else {
-                    btn.innerHTML = '❌ 发送失败（点击重试）';
+                    btn.textContent = '❌ 发送失败（点击重试）';
                     btn.classList.add('aca-error');
                     btn.disabled = false;
                     status.textContent = response ? response.message : '无法连接 VS Code';
@@ -252,9 +258,14 @@
 
         wrapper.appendChild(dismissBtn);
         wrapper.appendChild(btn);
-        wrapper.appendChild(preview);
         wrapper.appendChild(status);
-        element.parentElement.insertBefore(wrapper, element);
+
+        // 插入到代码块后面而不是前面，避免挤开正文
+        if (container.nextSibling) {
+            container.parentElement.insertBefore(wrapper, container.nextSibling);
+        } else {
+            container.parentElement.appendChild(wrapper);
+        }
     }
 
     // ======================== 手动发送按钮 ========================
@@ -268,7 +279,7 @@
 
         var btn = document.createElement('button');
         btn.className = BUTTON_CLASS + ' aca-manual-btn';
-        btn.innerHTML = '📤 发送到 VS Code';
+        btn.textContent = '📤 VS Code';
         btn.style.cssText = 'position:absolute;top:5px;right:28px;z-index:100;';
 
         btn.addEventListener('click', function(e) {
@@ -277,13 +288,13 @@
             var code = element.textContent || '';
             if (!code.trim()) return;
             btn.disabled = true;
-            btn.innerHTML = '⏳ 发送中...';
+            btn.textContent = '⏳ ...';
             sendToVSCode({ text: code }, function(response) {
                 if (response && response.success) {
-                    btn.innerHTML = '✅ 已发送';
+                    btn.textContent = '✅ 已发送';
                     btn.classList.add('aca-success');
                 } else {
-                    btn.innerHTML = '❌ 失败（点击重试）';
+                    btn.textContent = '❌ 重试';
                     btn.classList.add('aca-error');
                     btn.disabled = false;
                 }
@@ -293,7 +304,7 @@
         var closeBtn = document.createElement('button');
         closeBtn.className = 'aca-manual-close-btn';
         closeBtn.textContent = '×';
-        closeBtn.title = '隐藏此按钮';
+        closeBtn.title = '隐藏';
         closeBtn.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
@@ -306,48 +317,75 @@
         container.appendChild(closeBtn);
     }
 
-    // ======================== 扫描 ========================
+    // ======================== 扫描（修复：跳过标题和重复） ========================
 
     function scanPage() {
         if (!extensionEnabled || !autoScanEnabled) return;
 
         var processedParents = new Set();
-        var codeEls = document.querySelectorAll(
-            'pre, code, [class*="code"], [class*="Code"], [class*="highlight"], [class*="markdown"], [class*="prose"]'
-        );
+
+        // 只扫描 pre 和 code 标签，不扫描泛化的 class 选择器
+        var codeEls = document.querySelectorAll('pre, code');
 
         codeEls.forEach(function(el) {
             if (el.getAttribute(PROCESSED_ATTR)) return;
+
+            // 跳过代码块标题元素
+            if (isCodeBlockHeader(el)) return;
+
+            // 跳过已有祖先被处理的
+            if (hasProcessedAncestor(el)) return;
+
             var text = el.textContent || '';
             if (text.trim().length < 10) return;
 
+            // 找到最终目标：code 向上找 pre
+            var target;
+            if (el.tagName === 'CODE') {
+                target = el.closest('pre') || el;
+            } else {
+                target = el;
+            }
+
+            // 跳过已处理的目标
+            if (target.getAttribute(PROCESSED_ATTR)) return;
+            if (processedParents.has(target)) return;
+            processedParents.add(target);
+
             var actions = extractActions(text);
-            var target = el.tagName === 'CODE' ? (el.closest('pre') || el) : el;
 
             if (actions.length > 0) {
-                if (processedParents.has(target)) return;
-                processedParents.add(target);
                 addApplyButton(target, actions);
-            } else if (
-                (el.tagName === 'PRE' || el.tagName === 'CODE') &&
-                !looksLikeNonCode(text)
-            ) {
-                if (processedParents.has(target)) return;
-                processedParents.add(target);
+            } else if (!looksLikeNonCode(text)) {
                 addManualButton(target);
             }
         });
 
+        // 扫描 AI 回答容器（仅对 agent-action 内容）
         document.querySelectorAll(
             'div[class*="message"], div[class*="response"], div[class*="answer"], article'
         ).forEach(function(el) {
             if (el.getAttribute(PROCESSED_ATTR)) return;
             var text = el.textContent || '';
             if (!looksLikeAction(text)) return;
-            var actions = extractActions(text);
-            if (actions.length > 0 && !el.querySelector('[' + PROCESSED_ATTR + ']')) {
+
+            // 检查内部是否已经有按钮了
+            if (el.querySelector('.aca-button-wrapper')) {
                 el.setAttribute(PROCESSED_ATTR, 'scan-parent');
-                addApplyButton(el, actions);
+                return;
+            }
+
+            var actions = extractActions(text);
+            if (actions.length > 0) {
+                // 尝试找内部的 pre/code 来挂按钮，而不是挂在整个回答上
+                var innerCode = el.querySelector('pre, code');
+                if (innerCode && !innerCode.getAttribute(PROCESSED_ATTR)) {
+                    var innerTarget = innerCode.closest('pre') || innerCode;
+                    if (!innerTarget.getAttribute(PROCESSED_ATTR)) {
+                        addApplyButton(innerTarget, actions);
+                    }
+                }
+                el.setAttribute(PROCESSED_ATTR, 'scan-parent');
             }
         });
     }
