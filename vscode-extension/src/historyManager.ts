@@ -44,12 +44,13 @@ export class HistoryManager {
         this.save();
     }
 
-    private save() {
-        try {
-            fs.writeFileSync(HISTORY_FILE, JSON.stringify(this.items), 'utf-8');
-        } catch (_) {}
-    }
-
+private save() {
+    try {
+      const tmpFile = HISTORY_FILE + '.tmp';
+      fs.writeFileSync(tmpFile, JSON.stringify(this.items), 'utf-8');
+      fs.renameSync(tmpFile, HISTORY_FILE);
+    } catch (_) {}
+  }
     private load() {
         try {
             if (fs.existsSync(HISTORY_FILE)) {
