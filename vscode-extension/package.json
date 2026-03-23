@@ -13,7 +13,8 @@
   "activationEvents": [
     "onStartupFinished"
   ],
-  "main": "./out/extension.js",
+  "icon": "icon.png",
+    "main": "./out/extension.js",
 "contributes": {
   "commands": [
     { "command": "aiCodeAgent.startServer",      "title": "AI Agent: 启动服务器" },
