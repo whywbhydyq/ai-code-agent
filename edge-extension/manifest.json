@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Code Agent",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "将网页端 AI 的代码回答一键应用到本地 VS Code",
 
   "permissions": [
