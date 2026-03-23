@@ -1,5 +1,6 @@
 /**
- * AI Code Agent - 服务器（HTTP + WebSocket 双协议）
+ * AI Code Agent - 服务器
+ * 优化：自动寻找可用端口（解决多窗口冲突）
  */
 
 import * as http from 'http';
@@ -12,6 +13,7 @@ import { createHash } from 'crypto';
 
 const MAX_BODY_SIZE = 10 * 1024 * 1024;
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const MAX_PORT_TRIES = 10;
 
 interface WSClient {
     socket: import('net').Socket;
@@ -23,24 +25,49 @@ interface WSClient {
 export class AgentServer {
     private httpServer: http.Server | null = null;
     private wsClients: Map<string, WSClient> = new Map();
-    private port: number;
+    private basePort: number;
+    private actualPort: number = 0;
     private log: vscode.OutputChannel;
     public history: HistoryManager;
     private pingInterval: NodeJS.Timeout | null = null;
 
     constructor(port: number, log: vscode.OutputChannel) {
-        this.port = port;
+        this.basePort = port;
         this.log = log;
         this.history = new HistoryManager();
     }
 
-    async start(): Promise<void> {
+    /**
+     * 启动服务器，返回实际使用的端口号
+     * 如果 basePort 被占用，自动尝试 +1, +2, ... 直到 +MAX_PORT_TRIES
+     */
+    async start(): Promise<number> {
+        for (let offset = 0; offset < MAX_PORT_TRIES; offset++) {
+            const port = this.basePort + offset;
+            try {
+                await this.tryListen(port);
+                this.actualPort = port;
+                this.log.appendLine(`[Server] HTTP+WS 服务器启动：127.0.0.1:${port}`);
+                this.pingInterval = setInterval(() => this.pingClients(), 20000);
+                return port;
+            } catch (err: any) {
+                if (err.code === 'EADDRINUSE') {
+                    this.log.appendLine(`[Server] 端口 ${port} 被占用，尝试 ${port + 1}...`);
+                    continue;
+                }
+                throw err;
+            }
+        }
+        throw new Error(`端口 ${this.basePort}-${this.basePort + MAX_PORT_TRIES - 1} 全部被占用`);
+    }
+
+    private tryListen(port: number): Promise<void> {
         return new Promise((resolve, reject) => {
-            this.httpServer = http.createServer((req, res) => {
+            const server = http.createServer((req, res) => {
                 this.handleHttp(req, res);
             });
 
-            this.httpServer.on('upgrade', (req: http.IncomingMessage, socket: any, head: Buffer) => {
+            server.on('upgrade', (req: http.IncomingMessage, socket: any, head: Buffer) => {
                 if (req.url === '/ws') {
                     this.handleWSUpgrade(req, socket, head);
                 } else {
@@ -48,17 +75,12 @@ export class AgentServer {
                 }
             });
 
-            this.httpServer.on('error', (err: any) => {
-                if (err.code === 'EADDRINUSE') {
-                    reject(new Error(`端口 ${this.port} 已被占用，请修改端口或关闭占用程序`));
-                } else {
-                    reject(err);
-                }
+            server.on('error', (err: any) => {
+                reject(err);
             });
 
-            this.httpServer.listen(this.port, '127.0.0.1', () => {
-                this.log.appendLine(`[Server] HTTP+WS 服务器启动：127.0.0.1:${this.port}`);
-                this.pingInterval = setInterval(() => this.pingClients(), 20000);
+            server.listen(port, '127.0.0.1', () => {
+                this.httpServer = server;
                 resolve();
             });
         });
@@ -116,7 +138,8 @@ export class AgentServer {
         this.sendToClient(client, {
             type: 'connected',
             workspace,
-            version: '2.1.0',
+            port: this.actualPort,
+            version: '1.1.0',
         });
 
         socket.on('data', (data: Buffer) => this.handleWSData(client, data));
@@ -226,7 +249,6 @@ export class AgentServer {
                     this.sendToClient(client, { type: 'ack', reqId: cmd.reqId, message: `解析到 ${actions.length} 个操作` });
                     this.processActionsAsync(actions, client);
                 } else {
-                    // 不等待用户交互，先响应再处理
                     this.sendToClient(client, { type: 'ack', reqId: cmd.reqId, success: true, message: '已在 VS Code 中打开，请指定文件路径' });
                     this.handleManualCode(cmd.text || '');
                 }
@@ -235,7 +257,7 @@ export class AgentServer {
 
             case 'get-status': {
                 const ws = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
-                this.sendToClient(client, { type: 'status', workspace: ws, history: this.history.getRecent(10) });
+                this.sendToClient(client, { type: 'status', workspace: ws, port: this.actualPort, history: this.history.getRecent(10) });
                 break;
             }
 
@@ -355,8 +377,9 @@ export class AgentServer {
             json({
                 status: 'running',
                 workspace: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
+                port: this.actualPort,
                 wsClients: this.wsClients.size,
-                version: '2.1.0',
+                version: '1.1.0',
             });
             return;
         }
@@ -403,8 +426,6 @@ export class AgentServer {
                     this.processActionsAsync(actions, null);
                     json({ status: 'success', message: `解析到 ${actions.length} 个操作` });
                 } else {
-                    // 关键修复：先响应 HTTP，再在后台处理
-                    // 不用 await，让 HTTP 立即返回
                     json({ status: 'success', message: '已在 VS Code 中打开，请查看 VS Code 窗口' });
                     this.handleManualCode(text);
                 }
@@ -447,19 +468,14 @@ export class AgentServer {
 
     private async processActionsAsync(actions: AgentAction[], client: WSClient | null) {
         resetBatchMode();
-
         const results: Array<{ file: string; result: string; accepted: boolean }> = [];
 
         for (let i = 0; i < actions.length; i++) {
             const action = actions[i];
-
             if (client) {
                 this.sendToClient(client, {
-                    type: 'progress',
-                    current: i + 1,
-                    total: actions.length,
-                    file: action.file,
-                    action: action.action,
+                    type: 'progress', current: i + 1, total: actions.length,
+                    file: action.file, action: action.action,
                 });
             }
 
@@ -467,14 +483,7 @@ export class AgentServer {
                 const result = await processAction(action, this.log);
                 const accepted = result.startsWith('✅');
                 results.push({ file: action.file, result, accepted });
-
-                this.history.add({
-                    file: action.file,
-                    action: action.action,
-                    accepted,
-                    timestamp: Date.now(),
-                });
-
+                this.history.add({ file: action.file, action: action.action, accepted, timestamp: Date.now() });
                 if (client) {
                     this.sendToClient(client, { type: 'action-result', file: action.file, result, accepted });
                 }
@@ -482,14 +491,7 @@ export class AgentServer {
                 const errMsg = `❌ ${action.file}: ${err.message}`;
                 results.push({ file: action.file, result: errMsg, accepted: false });
                 this.log.appendLine(`[Server] 错误: ${err.message}`);
-
-                this.history.add({
-                    file: action.file,
-                    action: action.action,
-                    accepted: false,
-                    timestamp: Date.now(),
-                });
-
+                this.history.add({ file: action.file, action: action.action, accepted: false, timestamp: Date.now() });
                 if (client) {
                     this.sendToClient(client, { type: 'action-result', file: action.file, result: errMsg, accepted: false });
                 }
@@ -503,32 +505,17 @@ export class AgentServer {
         let summary = `处理完成：✅${acceptedFiles.length} 接受`;
         if (skippedCount > 0) summary += ` ⏭️${skippedCount} 跳过`;
         if (failedFiles.length > 0) summary += ` ❌${failedFiles.length} 失败`;
-
-        if (acceptedFiles.length > 0 && acceptedFiles.length <= 5) {
-            summary += '\n✅ ' + acceptedFiles.join(', ');
-        }
-        if (failedFiles.length > 0 && failedFiles.length <= 3) {
-            summary += '\n❌ ' + failedFiles.join(', ');
-        }
+        if (acceptedFiles.length > 0 && acceptedFiles.length <= 5) summary += '\n✅ ' + acceptedFiles.join(', ');
+        if (failedFiles.length > 0 && failedFiles.length <= 3) summary += '\n❌ ' + failedFiles.join(', ');
 
         vscode.window.showInformationMessage(`AI Agent: ${summary}`);
-
-        if (client) {
-            this.sendToClient(client, { type: 'done', summary, results });
-        }
-
-        this.broadcast({
-            type: 'history-updated',
-            history: this.history.getRecent(20),
-        });
+        if (client) { this.sendToClient(client, { type: 'done', summary, results }); }
+        this.broadcast({ type: 'history-updated', history: this.history.getRecent(20) });
     }
 
     private async doUndo() {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) {
-            vscode.window.showWarningMessage('请先打开一个工作区');
-            return;
-        }
+        if (!workspaceRoot) { vscode.window.showWarningMessage('请先打开一个工作区'); return; }
         try {
             execSync('git reset --soft HEAD~1', { cwd: workspaceRoot, encoding: 'utf-8' });
             vscode.window.showInformationMessage('AI Agent: 已撤销上一次 AI 修改');
@@ -547,12 +534,7 @@ export class AgentServer {
             await vscode.window.showTextDocument(doc);
             return;
         }
-        const action: AgentAction = {
-            action: 'write',
-            file: filePath.trim(),
-            content: code,
-            patches: null,
-        };
+        const action: AgentAction = { action: 'write', file: filePath.trim(), content: code, patches: null };
         processAction(action, this.log);
     }
 }
