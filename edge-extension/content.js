@@ -36,14 +36,15 @@
         return hasKeys && hasValue;
     }
 
-    function extractActions(text) {
-        var actions = [];
-        var patterns = [
-            /```(?:agent-action|agent_action)\s*\n([\s\S]*?)\n\s*```/gi,
-            /```json\s*\n([\s\S]*?)\n\s*```/gi,
-            /```\w*\s*\n([\s\S]*?)\n\s*```/gi,
-        ];
-        for (var p = 0; p < patterns.length; p++) {
+var _cachedPatterns = [
+  function() { return /```(?:agent-action|agent_action)\s*\n([\s\S]*?)\n\s*```/gi; },
+  function() { return /```json\s*\n([\s\S]*?)\n\s*```/gi; },
+  function() { return /```\w*\s*\n([\s\S]*?)\n\s*```/gi; },
+ ];
+
+ function extractActions(text) {
+  var actions = [];
+  var patterns = _cachedPatterns.map(function(f) { return f(); });        for (var p = 0; p < patterns.length; p++) {
             var regex = patterns[p];
             var match;
             while ((match = regex.exec(text)) !== null) {
