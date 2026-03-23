@@ -86,6 +86,11 @@ public history: HistoryManager;
         });
     }
 
+    /** 返回当前 WebSocket 连接数，供状态栏显示 */
+    getClientCount(): number {
+        return this.wsClients.size;
+    }
+
     stop() {
         if (this.pingInterval) {
             clearInterval(this.pingInterval);
