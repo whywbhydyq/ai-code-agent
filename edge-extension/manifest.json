@@ -28,8 +28,13 @@
     }
   ],
 
-  "action": {
-    "default_popup": "popup.html",
-    "default_title": "AI Code Agent"
+"web_accessible_resources": [
+  {
+   "resources": ["prompt-template.txt"],
+   "matches": ["<all_urls>"]
   }
-}
+ ],
+ "action": {
+  "default_popup": "popup.html",
+  "default_title": "AI Code Agent"
+ }}
