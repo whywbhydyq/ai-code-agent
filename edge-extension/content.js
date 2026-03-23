@@ -8,15 +8,24 @@
 
     var extensionEnabled = true;
     var autoScanEnabled = true;
+    var autoJumpEnabled = true;
 
-    chrome.storage.local.get(['extensionEnabled', 'autoScan'], function(result) {
+    chrome.storage.local.get(['extensionEnabled', 'autoScan', 'autoJump'], function(result) {
         extensionEnabled = result.extensionEnabled !== false;
         autoScanEnabled = result.autoScan !== false;
+        autoJumpEnabled = result.autoJump !== false;
         if (extensionEnabled && autoScanEnabled) {
             setTimeout(scanPage, 1500);
         }
         if (extensionEnabled) {
             wsConnect();
+        }
+    });
+
+    // 监听设置变化
+    chrome.storage.onChanged.addListener(function(changes) {
+        if (changes.autoJump) {
+            autoJumpEnabled = changes.autoJump.newValue !== false;
         }
     });
 
@@ -89,40 +98,82 @@
 
     // ======================== 智能过滤 ========================
 
-    // 判断文本是否像终端命令 / 非代码内容，不该加按钮
-    function looksLikeTerminalOrShort(text) {
+    function looksLikeNonCode(text) {
         var trimmed = text.trim();
         var lines = trimmed.split('\n');
+        var nonEmptyLines = lines.filter(function(l) { return l.trim().length > 0; });
 
         // 少于 3 行不加按钮
-        if (lines.length < 3) return true;
+        if (nonEmptyLines.length < 3) return true;
 
         // 少于 80 字符不加按钮
         if (trimmed.length < 80) return true;
 
-        // 所有行都以 $ 或 > 或 # 开头 → 终端命令
-        var terminalLines = lines.filter(function(l) {
-            var s = l.trim();
-            return s.startsWith('$') || s.startsWith('>') || s.startsWith('#') || s.startsWith('PS ');
-        });
-        if (terminalLines.length > lines.length * 0.6) return true;
+        // 检测终端命令行
+        var terminalCount = 0;
+        var stepCount = 0;
+        var naturalLangCount = 0;
 
-        // 常见命令关键词占大多数 → 终端
-        var cmdPatterns = [
-            /^(cd|ls|dir|mkdir|rm|cp|mv|cat|echo|npm|npx|yarn|pnpm|git|pip|python|node|cargo|go |docker|kubectl|brew|apt|sudo|chmod|chown|curl|wget)\s/i,
-        ];
-        var cmdCount = 0;
-        for (var i = 0; i < lines.length; i++) {
-            var line = lines[i].trim();
-            if (!line) continue;
-            for (var j = 0; j < cmdPatterns.length; j++) {
-                if (cmdPatterns[j].test(line)) { cmdCount++; break; }
+        for (var i = 0; i < nonEmptyLines.length; i++) {
+            var line = nonEmptyLines[i].trim();
+
+            // 终端提示符
+            if (/^[$>]\s/.test(line) || /^PS\s/.test(line) || /^C:\\/.test(line)) {
+                terminalCount++;
+                continue;
+            }
+
+            // 序号步骤（1. 2. 3.）
+            if (/^\d+[\.\)、]\s/.test(line)) {
+                stepCount++;
+                continue;
+            }
+
+            // 包含箭头的步骤说明
+            if (/[→\->]/.test(line) && /[\u4e00-\u9fff]/.test(line)) {
+                stepCount++;
+                continue;
+            }
+
+            // 中文自然语言为主的行（中文字符占比超过 30%）
+            var chineseChars = (line.match(/[\u4e00-\u9fff]/g) || []).length;
+            if (chineseChars > line.length * 0.3 && line.length > 5) {
+                naturalLangCount++;
+                continue;
             }
         }
-        var nonEmptyLines = lines.filter(function(l) { return l.trim().length > 0; }).length;
-        if (nonEmptyLines > 0 && cmdCount / nonEmptyLines > 0.5) return true;
+
+        // 60% 以上是终端命令
+        if (terminalCount / nonEmptyLines.length > 0.6) return true;
+
+        // 50% 以上是步骤说明
+        if (stepCount / nonEmptyLines.length > 0.5) return true;
+
+        // 50% 以上是自然语言
+        if (naturalLangCount / nonEmptyLines.length > 0.5) return true;
+
+        // 常见命令关键词占多数
+        var cmdRegex = /^(cd|ls|dir|mkdir|rm|cp|mv|cat|echo|npm|npx|yarn|pnpm|git|pip|python|node|cargo|go |docker|kubectl|brew|apt|sudo|chmod|chown|curl|wget|code|vsce)\s/i;
+        var cmdCount = 0;
+        for (var j = 0; j < nonEmptyLines.length; j++) {
+            if (cmdRegex.test(nonEmptyLines[j].trim())) cmdCount++;
+        }
+        if (nonEmptyLines.length > 0 && cmdCount / nonEmptyLines.length > 0.5) return true;
 
         return false;
+    }
+
+    // ======================== 自动跳转 VS Code ========================
+
+    function jumpToVSCode() {
+        if (!autoJumpEnabled) return;
+        // 使用 VS Code 的 protocol URL 激活窗口
+        var a = document.createElement('a');
+        a.href = 'vscode://file';
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(function() { a.remove(); }, 100);
     }
 
     // ======================== 通信 ========================
@@ -132,7 +183,13 @@
             payload.actions
                 ? { type: 'send-actions', actions: payload.actions }
                 : { type: 'send-raw-text', text: payload.text },
-            callback
+            function(response) {
+                // 发送成功后自动跳转
+                if (response && response.success) {
+                    jumpToVSCode();
+                }
+                if (callback) callback(response);
+            }
         );
     }
 
@@ -268,15 +325,13 @@
             var target = el.tagName === 'CODE' ? (el.closest('pre') || el) : el;
 
             if (actions.length > 0) {
-                // agent-action 代码块始终显示按钮
                 if (processedParents.has(target)) return;
                 processedParents.add(target);
                 addApplyButton(target, actions);
             } else if (
                 (el.tagName === 'PRE' || el.tagName === 'CODE') &&
-                !looksLikeTerminalOrShort(text)
+                !looksLikeNonCode(text)
             ) {
-                // 只给看起来像真正代码的块加手动按钮
                 if (processedParents.has(target)) return;
                 processedParents.add(target);
                 addManualButton(target);
@@ -342,12 +397,8 @@
             var selection = window.getSelection();
             if (!selection || selection.rangeCount === 0) return;
             var text = selection.toString().trim();
-
-            // 选中内容太短不显示
             if (text.length < 15) return;
-
-            // 选中内容看起来像终端命令也不显示
-            if (looksLikeTerminalOrShort(text)) return;
+            if (looksLikeNonCode(text)) return;
 
             var range = selection.getRangeAt(0);
             var rect = range.getBoundingClientRect();
