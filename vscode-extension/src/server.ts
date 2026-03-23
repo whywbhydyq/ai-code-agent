@@ -28,9 +28,9 @@ export class AgentServer {
     private basePort: number;
     private actualPort: number = 0;
     private log: vscode.OutputChannel;
-    public history: HistoryManager;
-    private pingInterval: NodeJS.Timeout | null = null;
-
+public history: HistoryManager;
+  private pingInterval: NodeJS.Timeout | null = null;
+  public onClientCountChange: ((count: number) => void) | null = null;
     constructor(port: number, log: vscode.OutputChannel) {
         this.basePort = port;
         this.log = log;
