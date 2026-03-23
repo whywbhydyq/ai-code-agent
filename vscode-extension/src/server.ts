@@ -457,6 +457,11 @@ export class AgentServer {
                 this.history.clear();
                 json({ success: true, message: '历史已清空' });
                 return;
+            case '/focus':
+                // 把 VS Code 窗口切到前台
+                vscode.commands.executeCommand('workbench.action.focusWindow');
+                json({ success: true });
+                return;
             default:
                 json({ status: 'error', message: '未知路由' }, 404);
         }
