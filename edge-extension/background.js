@@ -1,39 +1,43 @@
 var DEFAULT_PORT = 9960;
 var MAX_PORT_SCAN = 10;
-var cachedServerUrl = null;
-var cacheExpiry = 0;
 
-// 自动探测可用端口（从配置端口开始扫描）
+// [优化] 缓存已发现的服务器URL，避免每次操作都扫描10个端口
+var _cachedServerUrl = null;
+var _cacheExpiry = 0;
+var CACHE_TTL = 30000;
+
 async function findServerUrl() {
- if (cachedServerUrl && Date.now() < cacheExpiry) {
-  try {
-   var resp = await fetch(cachedServerUrl + '/status', { signal: AbortSignal.timeout(300) });
-   if (resp.ok) return cachedServerUrl;
-  } catch (_) {}
-  cachedServerUrl = null;
- }
- return new Promise(function(resolve) {
-  chrome.storage.local.get(['serverPort'], async function(r) {            var basePort = r.serverPort || DEFAULT_PORT;
+    // 缓存有效期内先验活
+    if (_cachedServerUrl && Date.now() < _cacheExpiry) {
+        try {
+            var check = await fetch(_cachedServerUrl + '/status', { signal: AbortSignal.timeout(300) });
+            if (check.ok) return _cachedServerUrl;
+        } catch (_) {}
+        _cachedServerUrl = null;
+    }
+
+    return new Promise(function(resolve) {
+        chrome.storage.local.get(['serverPort'], async function(r) {
+            var basePort = r.serverPort || DEFAULT_PORT;
 
             for (var i = 0; i < MAX_PORT_SCAN; i++) {
                 var port = basePort + i;
                 var url = 'http://127.0.0.1:' + port;
                 try {
                     var resp = await fetch(url + '/status', { signal: AbortSignal.timeout(500) });
-if (resp.ok) {
-       cachedServerUrl = url;
-       cacheExpiry = Date.now() + 30000;
-       resolve(url);
-       return;
-      }                } catch (_) {}
+                    if (resp.ok) {
+                        _cachedServerUrl = url;
+                        _cacheExpiry = Date.now() + CACHE_TTL;
+                        resolve(url);
+                        return;
+                    }
+                } catch (_) {}
             }
-            // 都找不到，返回默认
             resolve('http://127.0.0.1:' + basePort);
         });
     });
 }
 
-// 简单版（不扫描，直接用配置端口）
 function getServerUrl() {
     return new Promise(function(resolve) {
         chrome.storage.local.get(['serverPort'], function(r) {
@@ -45,12 +49,12 @@ function getServerUrl() {
 chrome.runtime.onInstalled.addListener(function() {
     chrome.contextMenus.create({
         id: 'send-to-vscode',
-        title: '📤 发送选中文本到 VS Code',
+        title: '\ud83d\udce4 发送选中文本到 VS Code',
         contexts: ['selection'],
     });
     chrome.contextMenus.create({
         id: 'scan-page',
-        title: '📤 扫描本页所有代码块',
+        title: '\ud83d\udd0d 扫描本页所有代码块',
         contexts: ['page'],
     });
 });
@@ -140,6 +144,8 @@ async function sendToVSCode(payload) {
         var data = await response.json();
         return { success: true, message: data.message || '已发送', data: data };
     } catch (e) {
+        // 连接失败时清除缓存，下次重新扫描
+        _cachedServerUrl = null;
         return { success: false, message: 'VS Code 服务器未启动，请检查 VS Code 中的 AI Code Agent 扩展' };
     }
 }
@@ -155,6 +161,7 @@ async function callVSCode(endpoint, body, method) {
         if (!response.ok) return { success: false, message: '错误: ' + response.status };
         return await response.json();
     } catch (e) {
+        _cachedServerUrl = null;
         return { success: false, message: '无法连接 VS Code 服务器' };
     }
 }
