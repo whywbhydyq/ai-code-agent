@@ -453,9 +453,9 @@ var scanTimeout = null;
 
             var range = selection.getRangeAt(0);
             var rect = range.getBoundingClientRect();
-            var btnTop = Math.max(rect.top - 44, 8);
-            var btnLeft = Math.min(Math.max(rect.left, 8), window.innerWidth - 220);
-
+var btnTop = Math.max(rect.top - 44, 8);
+   if (btnTop > window.innerHeight - 50) btnTop = window.innerHeight - 50;
+   var btnLeft = Math.min(Math.max(rect.left, 8), window.innerWidth - 220);
             floatingContainer = document.createElement('div');
             floatingContainer.className = 'aca-floating-container';
             floatingContainer.style.top = btnTop + 'px';
