@@ -15,11 +15,11 @@ if errorlevel 1 (
 )
 
 echo [2/3] Packaging VSIX...
-call npx vsce package --no-dependencies 2>nul
+echo y| call npx vsce package --no-dependencies --allow-missing-repository 2>nul
 if errorlevel 1 (
     echo Installing vsce...
     call npm install -g @vscode/vsce
-    call npx vsce package --no-dependencies
+    echo y| call npx vsce package --no-dependencies --allow-missing-repository
 )
 
 echo [3/3] Installing to VS Code...

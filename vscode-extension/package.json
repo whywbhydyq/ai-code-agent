@@ -4,6 +4,11 @@
   "description": "接收网页端 AI 的代码回答，在 VS Code 中展示 Diff 预览并应用修改",
   "version": "1.1.0",
   "publisher": "whywbhydyq",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/whywbhydyq/ai-code-agent"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
