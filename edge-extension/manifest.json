@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "AI Code Agent",
+  "version": "1.0.0",
+  "description": "将网页端 AI 的代码回答一键应用到本地 VS Code",
+
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "storage"
+  ],
+
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content-styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Code Agent"
+  }
+}

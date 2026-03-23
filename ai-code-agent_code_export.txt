@@ -1,0 +1,3434 @@
+================================================================================
+Project: D:\桌面\ai-code-agent
+Exported: 2026-03-23 15:30:27
+Files: 16
+================================================================================
+
+    1. export_code.py (7,512 bytes)
+    2. prompt-template.md (2,343 bytes)
+    3. edge-extension/background.js (4,386 bytes)
+    4. edge-extension/content-styles.css (3,240 bytes)
+    5. edge-extension/content.js (19,116 bytes)
+    6. edge-extension/manifest.json (673 bytes)
+    7. edge-extension/popup.html (9,760 bytes)
+    8. edge-extension/popup.js (12,299 bytes)
+    9. vscode-extension/.vscodeignore (81 bytes)
+   10. vscode-extension/package.json (2,397 bytes)
+   11. vscode-extension/tsconfig.json (436 bytes)
+   12. vscode-extension/src/codeApplier.ts (10,116 bytes)
+   13. vscode-extension/src/diffManager.ts (8,028 bytes)
+   14. vscode-extension/src/extension.ts (6,977 bytes)
+   15. vscode-extension/src/historyManager.ts (1,334 bytes)
+   16. vscode-extension/src/server.ts (18,528 bytes)
+
+================================================================================
+
+################################################################################
+# [1/16] export_code.py
+# Lines: 222  Size: 7,512 bytes
+################################################################################
+
+import os
+import sys
+import argparse
+from datetime import datetime
+
+EXCLUDE_DIRS = {
+    'node_modules', '.git', '.svn', '__pycache__', '.pytest_cache',
+    '.mypy_cache', '.tox', '.venv', 'venv', 'env', '.env',
+    'dist', 'build', 'out', '.next', '.nuxt', '.cache', 'coverage',
+    '.idea', '.vscode', 'target', 'bin', 'obj', '.gradle',
+    '.dart_tool', '.pub-cache', 'Pods', 'DerivedData', '.ai-agent-temp',
+}
+
+EXCLUDE_EXTENSIONS = {
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.webp',
+    '.tif', '.tiff', '.psd', '.ai', '.eps', '.raw', '.cr2', '.nef',
+    '.heic', '.heif', '.avif',
+    '.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+    '.mpg', '.mpeg', '.3gp', '.ogv',
+    '.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus',
+    '.mid', '.midi',
+    '.ttf', '.otf', '.woff', '.woff2', '.eot',
+    '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar', '.xz', '.zst', '.tgz',
+    '.exe', '.dll', '.so', '.dylib', '.o', '.a', '.lib',
+    '.pyc', '.pyo', '.class', '.jar', '.war', '.wasm', '.map',
+    '.db', '.sqlite', '.sqlite3', '.mdb',
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.bin', '.dat', '.iso', '.img', '.dmg', '.vsix', '.lock',
+}
+
+EXCLUDE_FILES = {
+    '.DS_Store', 'Thumbs.db', 'desktop.ini',
+    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+    'Cargo.lock', 'Gemfile.lock', 'poetry.lock', 'composer.lock', 'go.sum',
+}
+
+MAX_FILE_SIZE = 200 * 1024
+
+
+def is_text_file(filepath):
+    try:
+        with open(filepath, 'rb') as f:
+            chunk = f.read(8192)
+            if b'\x00' in chunk:
+                return False
+            return True
+    except (IOError, PermissionError):
+        return False
+
+
+def should_include(filepath, filename):
+    if filename in EXCLUDE_FILES:
+        return False
+    _, ext = os.path.splitext(filename)
+    if ext.lower() in EXCLUDE_EXTENSIONS:
+        return False
+    try:
+        size = os.path.getsize(filepath)
+        if size > MAX_FILE_SIZE or size == 0:
+            return False
+    except OSError:
+        return False
+    if not is_text_file(filepath):
+        return False
+    return True
+
+
+def strip_comments(content, ext):
+    if ext not in ('.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.go',
+                   '.c', '.cpp', '.h', '.hpp', '.cs', '.rs', '.rb',
+                   '.php', '.swift', '.kt', '.scala', '.sh', '.bash',
+                   '.ps1', '.r', '.pl', '.lua'):
+        return content
+
+    lines = content.split('\n')
+    result = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not stripped:
+            result.append(line)
+            continue
+
+        has_chinese = any('\u4e00' <= ch <= '\u9fff' for ch in stripped)
+
+        if not has_chinese:
+            result.append(line)
+            continue
+
+        if ext in ('.py', '.rb', '.sh', '.bash', '.ps1', '.r', '.pl'):
+            if stripped.startswith('#'):
+                continue
+            hash_pos = line.find('#')
+            if hash_pos > 0:
+                before = line[:hash_pos].rstrip()
+                if before:
+                    result.append(before)
+                    continue
+            result.append(line)
+
+        elif ext in ('.js', '.ts', '.jsx', '.tsx', '.java', '.go',
+                     '.c', '.cpp', '.h', '.hpp', '.cs', '.rs',
+                     '.swift', '.kt', '.scala', '.lua'):
+            if stripped.startswith('//'):
+                continue
+            slash_pos = line.find('//')
+            if slash_pos > 0:
+                before = line[:slash_pos].rstrip()
+                if before:
+                    result.append(before)
+                    continue
+            result.append(line)
+
+        else:
+            result.append(line)
+
+    return '\n'.join(result)
+
+
+def collect_files(root_dir):
+    files = []
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in EXCLUDE_DIRS and not d.startswith('.')
+        ]
+        dirnames.sort()
+        for filename in sorted(filenames):
+            filepath = os.path.join(dirpath, filename)
+            relpath = os.path.relpath(filepath, root_dir)
+            if should_include(filepath, filename):
+                files.append((relpath, filepath))
+    return files
+
+
+def export_project(root_dir, output_file):
+    root_dir = os.path.abspath(root_dir)
+    if not os.path.isdir(root_dir):
+        print(f"Error: directory not found -> {root_dir}")
+        sys.exit(1)
+
+    print(f"Scanning: {root_dir}")
+    files = collect_files(root_dir)
+    print(f"Found {len(files)} code files")
+
+    if not files:
+        print("No code files found!")
+        sys.exit(1)
+
+    total_lines = 0
+
+    with open(output_file, 'w', encoding='utf-8') as out:
+        out.write("=" * 80 + "\n")
+        out.write(f"Project: {root_dir}\n")
+        out.write(f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        out.write(f"Files: {len(files)}\n")
+        out.write("=" * 80 + "\n\n")
+
+        for i, (relpath, filepath) in enumerate(files, 1):
+            size = os.path.getsize(filepath)
+            out.write(f"  {i:3d}. {relpath.replace(os.sep, '/')} ({size:,} bytes)\n")
+        out.write("\n" + "=" * 80 + "\n\n")
+
+        for i, (relpath, filepath) in enumerate(files, 1):
+            try:
+                with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
+                    content = f.read()
+
+                _, ext = os.path.splitext(filepath)
+                content = strip_comments(content, ext.lower())
+
+                lines = content.count('\n') + 1
+                total_lines += lines
+                normalized = relpath.replace('\\', '/')
+
+                out.write(f"{'#' * 80}\n")
+                out.write(f"# [{i}/{len(files)}] {normalized}\n")
+                out.write(f"# Lines: {lines}  Size: {os.path.getsize(filepath):,} bytes\n")
+                out.write(f"{'#' * 80}\n\n")
+                out.write(content)
+                if not content.endswith('\n'):
+                    out.write('\n')
+                out.write('\n')
+
+            except Exception as e:
+                out.write(f"# [Read failed: {e}]\n\n")
+
+        out.write("=" * 80 + "\n")
+        out.write(f"Total files: {len(files)}\n")
+        out.write(f"Total lines: {total_lines:,}\n")
+        out.write("=" * 80 + "\n")
+
+    output_size = os.path.getsize(output_file)
+    print(f"\nDone!")
+    print(f"  Files: {len(files)}")
+    print(f"  Lines: {total_lines:,}")
+    print(f"  Output: {output_file}")
+    print(f"  Size: {output_size:,} bytes ({output_size/1024:.1f} KB)")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('directory', nargs='?', default='.')
+    parser.add_argument('-o', '--output', default=None)
+    parser.add_argument('--max-size', type=int, default=200)
+    args = parser.parse_args()
+
+    global MAX_FILE_SIZE
+    MAX_FILE_SIZE = args.max_size * 1024
+
+    root_dir = os.path.abspath(args.directory)
+    if args.output:
+        output_file = args.output
+    else:
+        output_file = f"{os.path.basename(root_dir)}_code_export.txt"
+
+    export_project(root_dir, output_file)
+
+
+if __name__ == '__main__':
+    main()
+
+################################################################################
+# [2/16] prompt-template.md
+# Lines: 81  Size: 2,343 bytes
+################################################################################
+
+# 给 AI 的提示词（使用时复制粘贴到 AI 对话的第一条消息中）
+
+---
+
+**复制以下内容发给 AI：**
+
+你好，请在后续对话中，当涉及代码文件的创建、修改或删除时，严格按照以下格式输出。
+
+## 格式规范
+
+所有代码操作指令必须包裹在 ```agent-action 代码块中，内容是标准 JSON。
+
+### 1. 创建新文件 或 完整替换现有文件
+
+```agent-action
+{
+  "action": "write",
+  "file": "相对路径/文件名.扩展名",
+  "content": "这里放完整的文件内容...\n每一行用 \\n 分隔\n双引号用 \\\" 转义\n反斜杠用 \\\\ 转义"
+}
+```
+
+### 2. 局部修改现有文件（推荐用于超过 50 行的大文件）
+
+```agent-action
+{
+  "action": "patch",
+  "file": "相对路径/文件名.扩展名",
+  "patches": [
+    {
+      "find": "要被替换的原始代码（从文件中精确复制，包含前后至少2行上下文）",
+      "replace": "替换后的完整代码"
+    },
+    {
+      "after": "在这行代码之后插入",
+      "insert": "要插入的新代码"
+    },
+    {
+      "delete": "要删除的这行代码"
+    }
+  ]
+}
+```
+
+### 3. 删除文件
+
+```agent-action
+{
+  "action": "delete",
+  "file": "相对路径/文件名.扩展名"
+}
+```
+
+## 禁止的行为
+
+1. ❌ 绝对不要在 content 中使用省略写法，比如：
+   - `// ... existing code ...`
+   - `# 此处省略`
+   - `/* ... rest unchanged ... */`
+   - `// same as before`
+   如果你要用 write 模式，就必须输出完整的文件内容，一行都不能省。
+
+2. ❌ patch 模式的 find 字段不要只写一行，至少包含目标代码前后各 1-2 行作为定位上下文。
+
+## 你可以做的
+
+- ✅ 一次回答中输出多个 agent-action 代码块（修改多个文件时）
+- ✅ 在代码块之外用正常文字解释你的修改思路
+- ✅ 文件路径使用 `/` 分隔（不要用 `\`）
+- ✅ 对于小文件（< 50行）直接用 write 模式更方便
+- ✅ 对于大文件（> 50行）用 patch 模式只修改需要的部分
+
+## 关于我的项目
+
+我的项目结构如下（请根据这个结构确定 file 字段的路径）：
+
+[在这里粘贴你的项目文件结构]
+
+请确认你理解了以上格式要求，后续我们开始正式工作。
+
+---
+
+################################################################################
+# [3/16] edge-extension/background.js
+# Lines: 139  Size: 4,386 bytes
+################################################################################
+
+const DEFAULT_PORT = 9960;
+
+function getServerUrl() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['serverPort'], (r) => {
+      resolve(`http://127.0.0.1:${r.serverPort || DEFAULT_PORT}`);
+    });
+  });
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.contextMenus.create({
+    id: 'send-to-vscode',
+    title: '📤 发送选中文本到 VS Code',
+    contexts: ['selection'],
+  });
+  chrome.contextMenus.create({
+    id: 'scan-page',
+    title: '🔍 扫描本页所有代码块',
+    contexts: ['page'],
+  });
+});
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === 'send-to-vscode' && info.selectionText) {
+    const result = await sendToVSCode({ type: 'raw-text', text: info.selectionText });
+    chrome.tabs.sendMessage(tab.id, {
+      type: 'show-notification',
+      success: result.success,
+      message: result.message,
+    });
+  }
+  if (info.menuItemId === 'scan-page') {
+    chrome.tabs.sendMessage(tab.id, { type: 'scan-and-send-all' });
+  }
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
+  if (message.type === 'send-actions') {
+    sendToVSCode({ type: 'actions', actions: message.actions })
+      .then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'send-raw-text') {
+    sendToVSCode({ type: 'raw-text', text: message.text })
+      .then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'check-connection') {
+    checkConnection().then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'restart-server') {
+    callVSCode('/restart', {}).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'undo-last-change') {
+    callVSCode('/undo', {}).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'open-log') {
+    callVSCode('/open-log', {}).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'switch-workspace') {
+    callVSCode('/switch-workspace', { path: message.path }).then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'update-setting') {
+    chrome.storage.local.set({ [message.key]: message.value });
+    sendResponse({ success: true });
+  }
+    if (message.type === 'get-history') {
+    callVSCode('/get-history', {}).then((resp) => {
+      sendResponse({ history: resp.history || [] });
+    });
+    return true;
+  }
+
+  if (message.type === 'clear-history') {
+    callVSCode('/clear-history', {}).then(sendResponse);
+    return true;
+  }
+});
+
+async function sendToVSCode(payload) {
+  try {
+    const baseUrl = await getServerUrl();
+    const endpoint = payload.type === 'raw-text' ? '/apply-text' : '/apply';
+    const response = await fetch(`${baseUrl}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      return { success: false, message: `服务器返回错误: ${response.status}` };
+    }
+    const data = await response.json();
+    return { success: true, message: data.message || '已发送', data };
+  } catch {
+    return { success: false, message: 'VS Code 服务器未启动，请检查 VS Code 中的 AI Code Agent 扩展' };
+  }
+}
+
+async function callVSCode(endpoint, body, method = 'POST') {
+  try {
+    const baseUrl = await getServerUrl();
+    const options = method === 'GET'
+      ? { method: 'GET' }
+      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+    const response = await fetch(`${baseUrl}${endpoint}`, options);
+    if (!response.ok) return { success: false, message: `错误: ${response.status}` };
+    return await response.json();
+  } catch {
+    return { success: false, message: '无法连接 VS Code 服务器' };
+  }
+}
+
+async function checkConnection() {
+  try {
+    const baseUrl = await getServerUrl();
+    const response = await fetch(`${baseUrl}/status`);
+    if (response.ok) {
+      const data = await response.json();
+      return { connected: true, workspace: data.workspace };
+    }
+    return { connected: false };
+  } catch {
+    return { connected: false };
+  }
+}
+
+################################################################################
+# [4/16] edge-extension/content-styles.css
+# Lines: 161  Size: 3,240 bytes
+################################################################################
+
+/* ============ 按钮通用样式 ============ */
+
+.aca-button-wrapper {
+  margin: 8px 0;
+  padding: 8px 12px;
+  background: #1a1a2e;
+  border: 1px solid #16213e;
+  border-radius: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+.aca-apply-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #007acc, #0098ff);
+  color: white;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 122, 204, 0.3);
+}
+
+.aca-apply-btn:hover {
+  background: linear-gradient(135deg, #005f99, #007acc);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 122, 204, 0.5);
+}
+
+.aca-apply-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.aca-apply-btn.aca-success {
+  background: linear-gradient(135deg, #28a745, #34d058) !important;
+}
+
+.aca-apply-btn.aca-error {
+  background: linear-gradient(135deg, #d73a49, #ff6b6b) !important;
+}
+
+/* 手动发送按钮（代码块右上角小按钮） */
+.aca-manual-btn {
+  padding: 4px 10px !important;
+  font-size: 11px !important;
+  opacity: 0.6;
+  z-index: 100;
+}
+
+.aca-manual-btn:hover {
+  opacity: 1 !important;
+}
+
+/* 文件预览列表 */
+.aca-preview {
+  margin-top: 6px;
+  padding-left: 4px;
+}
+
+.aca-preview-item {
+  font-size: 12px;
+  color: #8b949e;
+  padding: 2px 0;
+  font-family: 'Cascadia Code', 'Fira Code', monospace;
+}
+
+/* 状态文本 */
+.aca-status {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8b949e;
+}
+
+/* ============ 选中文本悬浮按钮 ============ */
+
+.aca-floating-send-btn {
+  position: absolute;
+  z-index: 99999;
+  padding: 6px 14px;
+  background: #007acc;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  transition: all 0.15s ease;
+  animation: aca-fadeIn 0.2s ease;
+}
+
+.aca-floating-send-btn:hover {
+  background: #005f99;
+  transform: scale(1.05);
+}
+
+/* ============ 通知条 ============ */
+
+.aca-notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 999999;
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  animation: aca-slideIn 0.3s ease;
+  max-width: 400px;
+}
+
+.aca-notif-success {
+  background: #1a3a1a;
+  color: #4caf50;
+  border: 1px solid #2e7d32;
+}
+
+.aca-notif-error {
+  background: #3a1a1a;
+  color: #ff6b6b;
+  border: 1px solid #d32f2f;
+}
+
+.aca-notif-fadeout {
+  opacity: 0;
+  transform: translateX(100px);
+  transition: all 0.5s ease;
+}
+
+/* ============ 动画 ============ */
+
+@keyframes aca-fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes aca-slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+################################################################################
+# [5/16] edge-extension/content.js
+# Lines: 556  Size: 19,116 bytes
+################################################################################
+
+(function () {
+  'use strict';
+
+  const PROCESSED_ATTR = 'data-aca-processed';
+  const BUTTON_CLASS = 'aca-apply-btn';
+
+  const ACTION_KEYWORDS = ['"action"', '"file"'];
+  const ACTION_VALUES = ['write', 'patch', 'create', 'update', 'delete'];
+
+  // ========================================================================
+  // ========================================================================
+
+  function looksLikeAction(text) {
+    if (!text) return false;
+    const lower = text.toLowerCase();
+    const hasKeys = ACTION_KEYWORDS.every((k) => lower.includes(k));
+    const hasValue = ACTION_VALUES.some((v) => lower.includes(`"${v}"`));
+    return hasKeys && hasValue;
+  }
+
+  function extractActions(text) {
+    const actions = [];
+
+    const patterns = [
+      /```(?:agent-action|agent_action)\s*\n([\s\S]*?)\n\s*```/gi,
+      /```json\s*\n([\s\S]*?)\n\s*```/gi,
+      /```\w*\s*\n([\s\S]*?)\n\s*```/gi,
+    ];
+
+    for (const regex of patterns) {
+      let match;
+      while ((match = regex.exec(text)) !== null) {
+        if (looksLikeAction(match[1])) {
+          tryParseAndPush(match[1], actions);
+        }
+      }
+      if (actions.length > 0) return actions;
+    }
+
+    const nakedJson = text.match(/\{\s*"action"\s*:[\s\S]*?\}/g);
+    if (nakedJson) {
+      nakedJson.forEach((s) => tryParseAndPush(s, actions));
+    }
+
+    return actions;
+  }
+
+  function tryParseAndPush(str, arr) {
+    const attempts = [
+      str.trim(),
+      str.trim().replace(/,\s*([\]}])/g, '$1'),
+      str.trim().replace(/'/g, '"'),
+    ];
+    for (const attempt of attempts) {
+      try {
+        const obj = JSON.parse(attempt);
+        if (isValidAction(obj)) {
+          arr.push(normalizeAction(obj));
+          return;
+        }
+      } catch (_) {}
+    }
+  }
+
+  function isValidAction(obj) {
+    if (!obj || typeof obj !== 'object') return false;
+    if (!obj.action) return false;
+    if (!obj.file && !obj.file_path && !obj.filePath) return false;
+    return ACTION_VALUES.includes(obj.action.toLowerCase());
+  }
+
+  function normalizeAction(obj) {
+    return {
+      action: obj.action.toLowerCase(),
+      file: obj.file || obj.file_path || obj.filePath,
+      content: obj.content || '',
+      patches: obj.patches || null,
+    };
+  }
+
+  // ========================================================================
+  // ========================================================================
+
+  function getSettings(callback) {
+    chrome.storage.local.get(
+      ['autoJump', 'serverPort'],
+      (result) => {
+        callback({
+          autoJump: result.autoJump !== false,
+          port: result.serverPort || 9960,
+        });
+      }
+    );
+  }
+
+  // ========================================================================
+  // ========================================================================
+
+  function sendToVSCode(payload, callback) {
+    chrome.runtime.sendMessage(
+      payload.actions
+        ? { type: 'send-actions', actions: payload.actions }
+        : { type: 'send-raw-text', text: payload.text },
+      callback
+    );
+  }
+
+  // ========================================================================
+  // ========================================================================
+
+  function addApplyButton(element, actions) {
+    if (element.getAttribute(PROCESSED_ATTR)) return;
+    element.setAttribute(PROCESSED_ATTR, 'true');
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'aca-button-wrapper';
+
+    const btn = document.createElement('button');
+    btn.className = BUTTON_CLASS;
+    btn.innerHTML = `⚡ 应用到 VS Code (${actions.length} 个文件)`;
+    btn.title = actions.map((a) => `${a.action}: ${a.file}`).join('\n');
+
+    const preview = document.createElement('div');
+    preview.className = 'aca-preview';
+    actions.forEach((a) => {
+      const item = document.createElement('div');
+      item.className = 'aca-preview-item';
+      const icon =
+        a.action === 'delete' ? '🗑️' : a.action === 'patch' ? '✏️' : '📝';
+      item.textContent = `${icon} ${a.action} → ${a.file}`;
+      preview.appendChild(item);
+    });
+
+    const status = document.createElement('span');
+    status.className = 'aca-status';
+
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      btn.disabled = true;
+      btn.innerHTML = '⏳ 发送中...';
+
+      sendToVSCode({ actions }, (response) => {
+        if (response && response.success) {
+          btn.innerHTML = '✅ 已发送到 VS Code';
+          btn.classList.add('aca-success');
+          status.textContent = response.message || '';
+        } else {
+          btn.innerHTML = '❌ 发送失败（点击重试）';
+          btn.classList.add('aca-error');
+          btn.disabled = false;
+          status.textContent = response ? response.message : '无法连接 VS Code';
+        }
+      });
+    });
+
+    wrapper.appendChild(btn);
+    wrapper.appendChild(preview);
+    wrapper.appendChild(status);
+    element.parentElement.insertBefore(wrapper, element);
+  }
+
+  function addManualButton(element) {
+    if (element.getAttribute(PROCESSED_ATTR)) return;
+    element.setAttribute(PROCESSED_ATTR, 'true');
+
+    const btn = document.createElement('button');
+    btn.className = `${BUTTON_CLASS} aca-manual-btn`;
+    btn.innerHTML = '📋 发送到 VS Code';
+
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const code = element.textContent || '';
+      if (!code.trim()) return;
+      btn.disabled = true;
+      btn.innerHTML = '⏳ 发送中...';
+      sendToVSCode({ text: code }, (response) => {
+        if (response && response.success) {
+          btn.innerHTML = '✅ 已发送';
+          btn.classList.add('aca-success');
+        } else {
+          btn.innerHTML = '❌ 失败（点击重试）';
+          btn.classList.add('aca-error');
+          btn.disabled = false;
+        }
+      });
+    });
+
+    const container = element.closest('pre') || element;
+    container.style.position = 'relative';
+    btn.style.cssText =
+      'position:absolute;top:5px;right:5px;z-index:100;';
+    container.appendChild(btn);
+  }
+
+  // ========================================================================
+  // ========================================================================
+
+  function scanPage() {
+    const processedParents = new Set();
+
+    const codeEls = document.querySelectorAll(
+      'pre, code, [class*="code"], [class*="Code"], [class*="highlight"], [class*="markdown"], [class*="prose"]'
+    );
+
+    codeEls.forEach((el) => {
+      if (el.getAttribute(PROCESSED_ATTR)) return;
+      const text = el.textContent || '';
+      if (text.trim().length < 10) return;
+
+      const actions = extractActions(text);
+      const target = el.tagName === 'CODE' ? (el.closest('pre') || el) : el;
+
+      if (actions.length > 0) {
+        if (processedParents.has(target)) return;
+        processedParents.add(target);
+        addApplyButton(target, actions);
+      } else if (
+        (el.tagName === 'PRE' || el.tagName === 'CODE') &&
+        text.trim().length > 30
+      ) {
+        if (processedParents.has(target)) return;
+        processedParents.add(target);
+        addManualButton(target);
+      }
+    });
+
+    document.querySelectorAll(
+      'div[class*="message"], div[class*="response"], div[class*="answer"], article'
+    ).forEach((el) => {
+      if (el.getAttribute(PROCESSED_ATTR)) return;
+      const text = el.textContent || '';
+      if (!looksLikeAction(text)) return;
+      const actions = extractActions(text);
+      if (actions.length > 0 && !el.querySelector(`[${PROCESSED_ATTR}]`)) {
+        el.setAttribute(PROCESSED_ATTR, 'scan-parent');
+        addApplyButton(el, actions);
+      }
+    });
+  }
+
+  // MutationObserver
+  let scanTimeout = null;
+  const observer = new MutationObserver(() => {
+    if (scanTimeout) clearTimeout(scanTimeout);
+    scanTimeout = setTimeout(scanPage, 800);
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  setTimeout(scanPage, 1500);
+
+  // ========================================================================
+  // ========================================================================
+
+  let floatingBtn = null;
+  let floatingTimeout = null;
+
+  function removeFloatingBtn() {
+    if (floatingBtn) {
+      floatingBtn.remove();
+      floatingBtn = null;
+    }
+    if (floatingTimeout) {
+      clearTimeout(floatingTimeout);
+      floatingTimeout = null;
+    }
+  }
+
+  document.addEventListener('mouseup', (e) => {
+    if (
+      e.target.classList.contains('aca-floating-send-btn') ||
+      e.target.classList.contains(BUTTON_CLASS)
+    ) {
+      return;
+    }
+
+    removeFloatingBtn();
+
+    setTimeout(() => {
+      const selection = window.getSelection();
+      if (!selection) return;
+      const text = selection.toString().trim();
+      if (text.length < 15) return;
+
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+
+      floatingBtn = document.createElement('button');
+      floatingBtn.className = 'aca-floating-send-btn';
+      floatingBtn.textContent = '📤 发送到 VS Code';
+      floatingBtn.style.cssText = `
+        position: fixed;
+        top: ${rect.top + window.scrollY - 44 + rect.height}px;
+        left: ${rect.left + rect.width / 2 - 80}px;
+        z-index: 2147483647;
+        padding: 7px 16px;
+        background: #007acc;
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+        white-space: nowrap;
+        animation: aca-fadeIn 0.15s ease;
+        pointer-events: auto;
+        top: ${Math.max(rect.top - 44, 8)}px;
+        left: ${Math.min(Math.max(rect.left, 8), window.innerWidth - 180)}px;
+      `;
+
+      floatingBtn.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        const actions = extractActions(text);
+        floatingBtn.textContent = '⏳ 发送中...';
+        floatingBtn.disabled = true;
+
+        if (actions.length > 0) {
+          sendToVSCode({ actions }, (resp) => {
+            showNotification(
+              resp && resp.success ? `✅ 已发送 ${actions.length} 个操作到 VS Code` : (resp ? resp.message : '连接失败'),
+              resp && resp.success
+            );
+            removeFloatingBtn();
+          });
+        } else {
+          sendToVSCode({ text }, (resp) => {
+            showNotification(
+              resp && resp.success ? '✅ 已发送（请在 VS Code 中指定文件路径）' : (resp ? resp.message : '连接失败'),
+              resp && resp.success
+            );
+            removeFloatingBtn();
+          });
+        }
+      });
+
+      document.body.appendChild(floatingBtn);
+
+      floatingTimeout = setTimeout(removeFloatingBtn, 6000);
+    }, 200);
+  });
+
+  document.addEventListener('mousedown', (e) => {
+    if (floatingBtn && !floatingBtn.contains(e.target)) {
+      removeFloatingBtn();
+    }
+  });
+
+  // ========================================================================
+  // ========================================================================
+
+  chrome.runtime.onMessage.addListener((message) => {
+    if (message.type === 'scan-and-send-all') {
+      const allActions = [];
+      document.querySelectorAll('pre, code').forEach((el) => {
+        extractActions(el.textContent || '').forEach((a) => allActions.push(a));
+      });
+      if (allActions.length === 0) {
+        showNotification('未检测到可用的代码操作指令', false);
+        return;
+      }
+      sendToVSCode({ actions: allActions }, (resp) => {
+        showNotification(
+          resp && resp.success
+            ? `已发送 ${allActions.length} 个操作到 VS Code`
+            : (resp ? resp.message : '连接失败'),
+          resp && resp.success
+        );
+      });
+    }
+    if (message.type === 'show-notification') {
+      showNotification(message.message, message.success);
+    }
+  });
+
+  // ========================================================================
+  // ========================================================================
+
+  function showNotification(text, success) {
+    const existing = document.querySelector('.aca-notification');
+    if (existing) existing.remove();
+
+    const notif = document.createElement('div');
+    notif.className = `aca-notification ${success ? 'aca-notif-success' : 'aca-notif-error'}`;
+    notif.textContent = text;
+    document.body.appendChild(notif);
+
+    setTimeout(() => {
+      notif.style.transition = 'all 0.5s ease';
+      notif.style.opacity = '0';
+      notif.style.transform = 'translateX(100px)';
+      setTimeout(() => notif.remove(), 500);
+    }, 3000);
+  }
+
+  console.log('[AI Code Agent] Content script loaded.');
+    // ========================================================================
+  // ========================================================================
+
+  let ws = null;
+  let wsReconnectTimer = null;
+  let wsReqId = 0;
+  const pendingRequests = new Map();
+
+  function wsConnect() {
+    chrome.storage.local.get(['serverPort'], (r) => {
+      const port = r.serverPort || 9960;
+      try {
+        ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+
+        ws.onopen = () => {
+          console.log('[AI Code Agent] WebSocket 已连接');
+          if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            handleWSMessage(data);
+          } catch (_) {}
+        };
+
+        ws.onclose = () => {
+          ws = null;
+          wsReconnectTimer = setTimeout(wsConnect, 3000);
+        };
+
+        ws.onerror = () => {
+          ws = null;
+          wsReconnectTimer = setTimeout(wsConnect, 3000);
+        };
+      } catch (_) {
+        wsReconnectTimer = setTimeout(wsConnect, 3000);
+      }
+    });
+  }
+
+  function wsSend(data) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(data));
+      return true;
+    }
+    return false;
+  }
+
+  function wsRequest(data) {
+    return new Promise((resolve) => {
+      const reqId = ++wsReqId + '_' + Date.now();
+      data.reqId = reqId;
+      const timeout = setTimeout(() => {
+        pendingRequests.delete(reqId);
+        resolve({ success: false, message: '请求超时' });
+      }, 10000);
+      pendingRequests.set(reqId, (resp) => {
+        clearTimeout(timeout);
+        pendingRequests.delete(reqId);
+        resolve(resp);
+      });
+      if (!wsSend(data)) {
+        clearTimeout(timeout);
+        pendingRequests.delete(reqId);
+        resolve({ success: false, message: '未连接到 VS Code' });
+      }
+    });
+  }
+
+  function handleWSMessage(data) {
+    if (data.reqId && pendingRequests.has(data.reqId)) {
+      pendingRequests.get(data.reqId)(data);
+      return;
+    }
+
+    switch (data.type) {
+      case 'connected':
+        console.log('[AI Code Agent] VS Code 工作区:', data.workspace);
+        break;
+
+      case 'inject-to-input':
+        injectToAIInput(data.message);
+        showNotification(
+          data.mode === 'error'
+            ? '✅ 错误信息已注入到 AI 输入框'
+            : `✅ 已注入 ${data.mode === 'file' ? '文件' : '选中代码'} 到 AI 输入框`,
+          true
+        );
+        break;
+
+      case 'progress':
+        showNotification(
+          `⏳ 处理中 [${data.current}/${data.total}]: ${data.file}`,
+          true
+        );
+        break;
+
+      case 'done':
+        showNotification(`🎉 ${data.summary}`, true);
+        break;
+
+      case 'history-updated':
+        chrome.runtime.sendMessage({ type: 'history-updated', history: data.history });
+        break;
+    }
+  }
+
+  /**
+   * 注入文本到当前页面的 AI 输入框
+   * 兼容多种 AI 网页的输入框结构
+   */
+  function injectToAIInput(text) {
+    const selectors = [
+      'textarea[placeholder*="message" i]',
+      'textarea[placeholder*="消息" i]',
+      'textarea[placeholder*="输入" i]',
+      'div[contenteditable="true"][role="textbox"]',
+      'div[contenteditable="true"]',
+      'textarea',
+    ];
+
+    let target = null;
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) { target = el; break; }
+    }
+
+    if (!target) {
+      showNotification('❌ 未找到 AI 输入框，请手动粘贴', false);
+      navigator.clipboard.writeText(text).catch(() => {});
+      return;
+    }
+
+    if (target.tagName === 'TEXTAREA') {
+      const currentVal = target.value;
+      const newVal = currentVal ? currentVal + '\n\n' + text : text;
+      target.value = newVal;
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+      // contenteditable div
+      const currentContent = target.innerText || '';
+      const newContent = currentContent ? currentContent + '\n\n' + text : text;
+      target.innerText = newContent;
+      target.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    }
+
+    target.focus();
+    if (target.tagName === 'TEXTAREA') {
+      target.selectionStart = target.selectionEnd = target.value.length;
+    }
+
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  wsConnect();
+})();
+
+################################################################################
+# [6/16] edge-extension/manifest.json
+# Lines: 35  Size: 673 bytes
+################################################################################
+
+{
+  "manifest_version": 3,
+  "name": "AI Code Agent",
+  "version": "1.0.0",
+  "description": "将网页端 AI 的代码回答一键应用到本地 VS Code",
+
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "storage"
+  ],
+
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content-styles.css"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AI Code Agent"
+  }
+}
+
+################################################################################
+# [7/16] edge-extension/popup.html
+# Lines: 364  Size: 9,760 bytes
+################################################################################
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      width: 380px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      padding: 14px;
+      font-size: 13px;
+    }
+
+    h1 {
+      font-size: 15px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #89b4fa;
+    }
+
+    /* 状态卡片 */
+    .status-card {
+      background: #313244;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .status-left { display: flex; flex-direction: column; gap: 3px; }
+
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 13px;
+    }
+
+    .dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .dot-green { background: #a6e3a1; box-shadow: 0 0 5px #a6e3a1; }
+    .dot-red   { background: #f38ba8; box-shadow: 0 0 5px #f38ba8; }
+
+    .workspace-path {
+      font-size: 11px;
+      color: #6c7086;
+      font-family: monospace;
+      word-break: break-all;
+      max-width: 260px;
+    }
+
+    /* 开关行 */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #313244;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+
+    .toggle-label { font-size: 13px; color: #cdd6f4; }
+    .toggle-hint  { font-size: 11px; color: #6c7086; margin-top: 2px; }
+
+    /* Toggle 开关 */
+    .toggle-switch {
+      position: relative;
+      width: 42px; height: 22px;
+      flex-shrink: 0;
+    }
+
+    .toggle-switch input { display: none; }
+
+    .toggle-slider {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #45475a;
+      border-radius: 22px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .toggle-slider::before {
+      content: '';
+      position: absolute;
+      width: 16px; height: 16px;
+      left: 3px; top: 3px;
+      background: white;
+      border-radius: 50%;
+      transition: transform 0.2s;
+    }
+
+    .toggle-switch input:checked + .toggle-slider {
+      background: #89b4fa;
+    }
+
+    .toggle-switch input:checked + .toggle-slider::before {
+      transform: translateX(20px);
+    }
+
+    /* 快捷操作区 */
+    .section-title {
+      font-size: 11px;
+      color: #6c7086;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 6px;
+    }
+
+    .action-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+
+    .action-btn {
+      padding: 8px 6px;
+      border: none;
+      border-radius: 6px;
+      background: #313244;
+      color: #cdd6f4;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+      line-height: 1.4;
+    }
+
+    .action-btn:hover { background: #45475a; }
+
+    .action-btn.danger:hover {
+      background: #3a1a1a;
+      color: #f38ba8;
+    }
+
+    /* 项目路径选择 */
+    .path-section {
+      background: #313244;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+
+    .path-input-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    input[type="text"], input[type="number"], textarea, select {
+      width: 100%;
+      padding: 7px 9px;
+      border: 1px solid #45475a;
+      border-radius: 6px;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      font-size: 12px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: #89b4fa;
+    }
+
+    .btn-small {
+      padding: 7px 12px;
+      border: none;
+      border-radius: 6px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .btn-small:hover { background: #74c7ec; }
+
+    /* 项目列表 */
+    .project-list {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+
+    .project-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 8px;
+      background: #1e1e2e;
+      border-radius: 5px;
+      font-size: 11px;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+
+    .project-item:hover  { border-color: #45475a; }
+    .project-item.active { border-color: #89b4fa; color: #89b4fa; }
+
+    .project-item-name { font-family: monospace; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-item-del  { color: #6c7086; cursor: pointer; padding: 0 4px; font-size: 14px; flex-shrink: 0; }
+    .project-item-del:hover { color: #f38ba8; }
+
+    /* 手动输入区 */
+    .manual-section {
+      background: #313244;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+
+    textarea {
+      height: 90px;
+      resize: vertical;
+      font-family: "Cascadia Code", "Fira Code", monospace;
+      font-size: 11px;
+    }
+
+    .btn-primary {
+      display: block;
+      width: 100%;
+      padding: 9px;
+      margin-top: 7px;
+      border: none;
+      border-radius: 6px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .btn-primary:hover { background: #74c7ec; }
+    .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* 端口设置 */
+    .port-section {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .port-section label { font-size: 12px; color: #6c7086; white-space: nowrap; }
+    .port-section input { width: 80px; flex-shrink: 0; }
+
+    /* 结果提示 */
+    .result {
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      display: none;
+      margin-top: 6px;
+    }
+
+    .result-success { background: #1a3a1a; color: #a6e3a1; border: 1px solid #2e7d32; display: block; }
+    .result-error   { background: #3a1a1a; color: #f38ba8; border: 1px solid #d32f2f; display: block; }
+
+    .divider {
+      height: 1px;
+      background: #313244;
+      margin: 8px 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>⚡ AI Code Agent</h1>
+
+  <!-- 连接状态 -->
+  <div class="status-card">
+    <div class="status-left">
+      <div class="status-row">
+        <span id="status-dot" class="dot dot-red"></span>
+        <span id="status-label">检查连接中...</span>
+      </div>
+      <div id="workspace-info" class="workspace-path"></div>
+    </div>
+    <button class="btn-small" id="refresh-btn" style="height:32px">🔄 刷新</button>
+  </div>
+
+  <!-- 开关：自动跳转到 VS Code -->
+  <div class="toggle-row">
+    <div>
+      <div class="toggle-label">🖥️ 点击后自动跳转到 VS Code</div>
+      <div class="toggle-hint">发送代码后自动切换窗口到 VS Code</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="auto-jump-toggle" checked />
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
+
+  <!-- 开关：自动检测代码块 -->
+  <div class="toggle-row">
+    <div>
+      <div class="toggle-label">🔍 自动检测页面代码块</div>
+      <div class="toggle-hint">在 AI 回答旁自动显示「应用」按钮</div>
+    </div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="auto-scan-toggle" checked />
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
+
+  <!-- 快捷操作 -->
+  <div class="section-title">快捷操作</div>
+  <div class="action-grid">
+    <button class="action-btn" id="btn-scan">🔍 立即扫描当前页面</button>
+    <button class="action-btn" id="btn-restart">🔁 重启 VS Code 服务器</button>
+    <button class="action-btn danger" id="btn-undo">⏪ 撤销上次 AI 修改</button>
+    <button class="action-btn" id="btn-open-log">📋 查看操作日志</button>
+  </div>
+
+  <!-- 项目路径管理 -->
+  <div class="path-section">
+    <div class="section-title">📂 项目路径管理</div>
+    <div class="path-input-row">
+      <input type="text" id="path-input" placeholder="D:\桌面\my-project 或 /home/user/project" />
+      <button class="btn-small" id="add-path-btn">添加</button>
+    </div>
+    <div id="project-list" class="project-list"></div>
+    <div style="font-size:11px;color:#6c7086;margin-top:6px;">
+      蓝色高亮 = VS Code 当前打开的工作区
+    </div>
+  </div>
+
+  <!-- 端口设置 -->
+  <div class="port-section">
+    <label>服务器端口：</label>
+    <input type="number" id="port-input" value="9960" min="1024" max="65535" />
+    <button class="btn-small" id="save-port-btn">保存</button>
+  </div>
+
+  <!-- 手动粘贴 -->
+  <div class="manual-section">
+    <div class="section-title">手动粘贴 AI 回复</div>
+    <textarea id="manual-text" placeholder="粘贴包含 agent-action 代码块的 AI 回复文本..."></textarea>
+    <button class="btn-primary" id="manual-send-btn">📤 发送到 VS Code</button>
+  </div>
+
+  <div id="result" class="result"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+
+################################################################################
+# [8/16] edge-extension/popup.js
+# Lines: 311  Size: 12,299 bytes
+################################################################################
+
+document.addEventListener('DOMContentLoaded', () => {
+
+  const statusDot      = document.getElementById('status-dot');
+  const statusLabel    = document.getElementById('status-label');
+  const workspaceInfo  = document.getElementById('workspace-info');
+  const refreshBtn     = document.getElementById('refresh-btn');
+  const autoJumpToggle = document.getElementById('auto-jump-toggle');
+  const autoScanToggle = document.getElementById('auto-scan-toggle');
+  const portInput      = document.getElementById('port-input');
+  const savePortBtn    = document.getElementById('save-port-btn');
+  const pathInput      = document.getElementById('path-input');
+  const addPathBtn     = document.getElementById('add-path-btn');
+  const projectList    = document.getElementById('project-list');
+  const manualText     = document.getElementById('manual-text');
+  const manualSendBtn  = document.getElementById('manual-send-btn');
+  const resultDiv      = document.getElementById('result');
+  const btnScan        = document.getElementById('btn-scan');
+  const btnRestart     = document.getElementById('btn-restart');
+  const btnUndo        = document.getElementById('btn-undo');
+  const btnOpenLog     = document.getElementById('btn-open-log');
+
+  let currentWorkspace = '';
+
+  chrome.storage.local.get(
+    ['serverPort', 'autoJump', 'autoScan', 'savedProjects'],
+    (result) => {
+      if (result.serverPort) portInput.value = result.serverPort;
+      autoJumpToggle.checked = result.autoJump !== false;
+      autoScanToggle.checked = result.autoScan  !== false;
+      renderProjectList(result.savedProjects || []);
+    }
+  );
+
+  checkConnection();
+
+  function checkConnection() {
+    statusLabel.textContent = '检查中...';
+    chrome.runtime.sendMessage({ type: 'check-connection' }, (response) => {
+      if (response && response.connected) {
+        statusDot.className = 'dot dot-green';
+        statusLabel.textContent = 'VS Code 已连接';
+        currentWorkspace = response.workspace || '';
+        workspaceInfo.textContent = currentWorkspace
+          ? `📂 ${currentWorkspace}` : '';
+        renderProjectList();
+      } else {
+        statusDot.className = 'dot dot-red';
+        statusLabel.textContent = '未连接 — 检查 VS Code 扩展是否启动';
+        workspaceInfo.textContent = '';
+      }
+    });
+  }
+
+  refreshBtn.addEventListener('click', checkConnection);
+
+  autoJumpToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ autoJump: autoJumpToggle.checked });
+    chrome.runtime.sendMessage({
+      type: 'update-setting',
+      key: 'autoJump',
+      value: autoJumpToggle.checked,
+    });
+    showResult(
+      autoJumpToggle.checked ? '已开启自动跳转到 VS Code' : '已关闭自动跳转',
+      true
+    );
+  });
+
+  autoScanToggle.addEventListener('change', () => {
+    chrome.storage.local.set({ autoScan: autoScanToggle.checked });
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, {
+          type: 'toggle-auto-scan',
+          enabled: autoScanToggle.checked,
+        });
+      }
+    });
+    showResult(
+      autoScanToggle.checked ? '已开启自动代码块检测' : '已关闭自动代码块检测',
+      true
+    );
+  });
+
+  savePortBtn.addEventListener('click', () => {
+    const port = parseInt(portInput.value, 10);
+    if (port >= 1024 && port <= 65535) {
+      chrome.storage.local.set({ serverPort: port }, () => {
+        showResult(`端口已保存为 ${port}，重新检查连接...`, true);
+        checkConnection();
+      });
+    } else {
+      showResult('端口号无效（1024~65535）', false);
+    }
+  });
+
+  btnScan.addEventListener('click', () => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        chrome.tabs.sendMessage(tabs[0].id, { type: 'scan-and-send-all' });
+        showResult('已触发全页扫描', true);
+      }
+    });
+  });
+
+  btnRestart.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'restart-server' }, (resp) => {
+      showResult(
+        resp && resp.success ? '服务器重启指令已发送' : '发送失败，请手动在 VS Code 中重启',
+        resp && resp.success
+      );
+      setTimeout(checkConnection, 2000);
+    });
+  });
+
+  btnUndo.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'undo-last-change' }, (resp) => {
+      showResult(
+        resp && resp.success ? '撤销指令已发送到 VS Code' : (resp ? resp.message : '发送失败'),
+        resp && resp.success
+      );
+    });
+  });
+
+  btnOpenLog.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'open-log' }, () => {
+      showResult('已发送「打开日志」指令', true);
+    });
+  });
+
+  function getSavedProjects(callback) {
+    chrome.storage.local.get(['savedProjects'], (r) => {
+      callback(r.savedProjects || []);
+    });
+  }
+
+  function saveProjects(projects) {
+    chrome.storage.local.set({ savedProjects: projects });
+  }
+
+  function renderProjectList(projects) {
+    if (projects === undefined) {
+      getSavedProjects(renderProjectList);
+      return;
+    }
+    projectList.innerHTML = '';
+    if (projects.length === 0) {
+      projectList.innerHTML =
+        '<div style="color:#6c7086;font-size:11px;padding:4px 0">暂无保存的项目路径</div>';
+      return;
+    }
+    projects.forEach((p, i) => {
+      const item = document.createElement('div');
+      item.className = 'project-item' +
+        (p === currentWorkspace ? ' active' : '');
+
+      const name = document.createElement('span');
+      name.className = 'project-item-name';
+      name.textContent = p;
+      name.title = p;
+
+      name.addEventListener('click', () => {
+        chrome.runtime.sendMessage(
+          { type: 'switch-workspace', path: p },
+          (resp) => {
+            showResult(
+              resp && resp.success
+                ? `已发送切换工作区指令: ${p}`
+                : (resp ? resp.message : '发送失败'),
+              resp && resp.success
+            );
+            setTimeout(checkConnection, 1500);
+          }
+        );
+      });
+
+      const del = document.createElement('span');
+      del.className = 'project-item-del';
+      del.textContent = '×';
+      del.title = '删除此路径';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        getSavedProjects((list) => {
+          list.splice(i, 1);
+          saveProjects(list);
+          renderProjectList(list);
+        });
+      });
+
+      item.appendChild(name);
+      item.appendChild(del);
+      projectList.appendChild(item);
+    });
+  }
+
+  addPathBtn.addEventListener('click', () => {
+    const p = pathInput.value.trim();
+    if (!p) { showResult('请输入路径', false); return; }
+    getSavedProjects((list) => {
+      if (list.includes(p)) {
+        showResult('该路径已存在', false);
+        return;
+      }
+      list.push(p);
+      saveProjects(list);
+      renderProjectList(list);
+      pathInput.value = '';
+      showResult('路径已添加', true);
+    });
+  });
+
+  pathInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') addPathBtn.click();
+  });
+
+  manualSendBtn.addEventListener('click', () => {
+    const text = manualText.value.trim();
+    if (!text) { showResult('请输入文本', false); return; }
+
+    manualSendBtn.disabled = true;
+    manualSendBtn.textContent = '⏳ 发送中...';
+
+    chrome.runtime.sendMessage(
+      { type: 'send-raw-text', text },
+      (response) => {
+        manualSendBtn.disabled = false;
+        manualSendBtn.textContent = '📤 发送到 VS Code';
+        if (response && response.success) {
+          showResult(response.message || '已发送', true);
+          manualText.value = '';
+        } else {
+          showResult(response ? response.message : '发送失败', false);
+        }
+      }
+    );
+  });
+
+  function showResult(msg, success) {
+    resultDiv.textContent = msg;
+    resultDiv.className = success ? 'result result-success' : 'result result-error';
+    clearTimeout(resultDiv._t);
+    resultDiv._t = setTimeout(() => {
+      resultDiv.className = 'result';
+    }, 4000);
+  }
+  const historySection = document.createElement('div');
+  historySection.className = 'manual-section';
+  historySection.style.marginBottom = '10px';
+  historySection.innerHTML = `
+    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+      <span>📜 操作历史</span>
+      <span id="history-count" style="color:#6c7086;font-size:10px"></span>
+    </div>
+    <div id="history-list" style="max-height:120px;overflow-y:auto;margin-top:6px"></div>
+    <button id="clear-history-btn" style="
+      width:100%;margin-top:6px;padding:5px;border:none;border-radius:5px;
+      background:#45475a;color:#cdd6f4;font-size:11px;cursor:pointer
+    ">🗑️ 清空历史</button>
+  `;
+
+  const manualSectionEl = document.querySelector('.manual-section');
+  manualSectionEl.parentNode.insertBefore(historySection, manualSectionEl);
+
+  const historyList = document.getElementById('history-list');
+  const historyCount = document.getElementById('history-count');
+  const clearHistoryBtn = document.getElementById('clear-history-btn');
+
+  function renderHistory(items) {
+    if (!items || items.length === 0) {
+      historyList.innerHTML = '<div style="color:#6c7086;font-size:11px;padding:4px">暂无操作记录</div>';
+      historyCount.textContent = '';
+      return;
+    }
+    historyCount.textContent = `共 ${items.length} 条`;
+    historyList.innerHTML = items.map((item) => {
+      const icon = item.accepted ? '✅' : item.result && item.result.startsWith('⏭️') ? '⏭️' : '❌';
+      const actionColor = {
+        write: '#89b4fa', create: '#a6e3a1',
+        patch: '#fab387', delete: '#f38ba8', update: '#89dceb'
+      }[item.action] || '#cdd6f4';
+      return `
+        <div style="
+          display:flex;align-items:center;gap:6px;
+          padding:4px 6px;border-radius:4px;margin-bottom:2px;
+          background:#1e1e2e;font-size:11px;
+        " title="${item.timeStr}">
+          <span>${icon}</span>
+          <span style="color:${actionColor};flex-shrink:0">${item.action}</span>
+          <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+            font-family:monospace;color:#cdd6f4">${item.file}</span>
+          <span style="color:#6c7086;flex-shrink:0;font-size:10px">${item.timeStr.split(' ')[1] || ''}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  chrome.runtime.sendMessage({ type: 'get-history' }, (resp) => {
+    if (resp && resp.history) renderHistory(resp.history);
+  });
+
+  clearHistoryBtn.addEventListener('click', () => {
+    chrome.runtime.sendMessage({ type: 'clear-history' }, () => {
+      renderHistory([]);
+      showResult('历史记录已清空', true);
+    });
+  });
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'history-updated') renderHistory(msg.history);
+  });
+});
+
+################################################################################
+# [9/16] vscode-extension/.vscodeignore
+# Lines: 7  Size: 81 bytes
+################################################################################
+
+.vscode/**
+src/**
+node_modules/**
+.gitignore
+tsconfig.json
+**/*.ts
+**/*.map
+
+################################################################################
+# [10/16] vscode-extension/package.json
+# Lines: 64  Size: 2,397 bytes
+################################################################################
+
+{
+  "name": "ai-code-agent",
+  "displayName": "AI Code Agent",
+  "description": "接收网页端 AI 的代码回答，在 VS Code 中展示 Diff 预览并应用修改",
+  "version": "1.0.0",
+  "publisher": "your-name",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+"contributes": {
+  "commands": [
+    { "command": "aiCodeAgent.startServer",      "title": "AI Agent: 启动服务器" },
+    { "command": "aiCodeAgent.stopServer",       "title": "AI Agent: 停止服务器" },
+    { "command": "aiCodeAgent.undoLastChange",   "title": "AI Agent: 撤销上一次 AI 修改" },
+    { "command": "aiCodeAgent.openLog",          "title": "AI Agent: 打开操作日志" },
+    { "command": "aiCodeAgent.sendCurrentFile",  "title": "AI Agent: 发送当前文件到浏览器 AI" },
+    { "command": "aiCodeAgent.sendSelection",    "title": "AI Agent: 发送选中代码到浏览器 AI" },
+    { "command": "aiCodeAgent.sendError",        "title": "AI Agent: 发送错误信息到浏览器 AI" }
+  ],
+  "keybindings": [
+    {
+      "command": "aiCodeAgent.sendCurrentFile",
+      "key": "ctrl+shift+alt+f",
+      "when": "editorTextFocus"
+    },
+    {
+      "command": "aiCodeAgent.sendSelection",
+      "key": "ctrl+shift+alt+s",
+      "when": "editorHasSelection"
+    },
+    {
+      "command": "aiCodeAgent.sendError",
+      "key": "ctrl+shift+alt+e"
+    }
+  ],
+  "configuration": {
+    "title": "AI Code Agent",
+    "properties": {
+      "aiCodeAgent.port":                { "type": "number",  "default": 9960, "description": "本地服务器端口" },
+      "aiCodeAgent.autoStart":           { "type": "boolean", "default": true, "description": "VS Code 启动时自动启动服务器" },
+      "aiCodeAgent.requireConfirmation": { "type": "boolean", "default": true, "description": "修改前显示 Diff 预览" },
+      "aiCodeAgent.autoGitSnapshot":     { "type": "boolean", "default": true, "description": "修改前自动 Git 快照" }
+    }
+  }
+},
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "prepackage": "npm run compile",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.3.3"
+  }
+}
+
+################################################################################
+# [11/16] vscode-extension/tsconfig.json
+# Lines: 18  Size: 436 bytes
+################################################################################
+
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2020",
+    "lib": ["ES2020"],
+    "outDir": "out",
+    "rootDir": "src",
+    "sourceMap": true,
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", ".vscode-test"]
+}
+
+################################################################################
+# [12/16] vscode-extension/src/codeApplier.ts
+# Lines: 304  Size: 10,116 bytes
+################################################################################
+
+/**
+ * 代码操作解析与应用引擎
+ *
+ * 职责：
+ * 1. 从原始文本中提取 agent-action JSON
+ * 2. 执行 patch（查找替换）操作
+ * 3. 检测 AI "偷懒"输出
+ */
+
+export interface PatchItem {
+  find?: string;
+  replace?: string;
+  after?: string;
+  before?: string;
+  insert?: string;
+  delete?: string;
+}
+
+export interface AgentAction {
+  action: 'write' | 'create' | 'update' | 'patch' | 'delete';
+  file: string;
+  content: string;
+  patches: PatchItem[] | null;
+}
+
+// ========================================================================
+// ========================================================================
+
+export function parseActionsFromText(text: string): AgentAction[] {
+  const actions: AgentAction[] = [];
+
+  const agentRegex =
+    /```(?:agent-action|agent_action)\s*\n([\s\S]*?)\n\s*```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = agentRegex.exec(text)) !== null) {
+    const parsed = safeJsonParse(match[1]);
+    if (parsed && isValidAction(parsed)) {
+      actions.push(normalizeAction(parsed));
+    }
+  }
+
+  if (actions.length > 0) return actions;
+
+  const jsonRegex = /```json\s*\n([\s\S]*?)\n\s*```/gi;
+  while ((match = jsonRegex.exec(text)) !== null) {
+    const parsed = safeJsonParse(match[1]);
+    if (parsed && isValidAction(parsed)) {
+      actions.push(normalizeAction(parsed));
+    }
+  }
+
+  if (actions.length > 0) return actions;
+
+  const anyRegex = /```\w*\s*\n([\s\S]*?)\n\s*```/gi;
+  while ((match = anyRegex.exec(text)) !== null) {
+    const parsed = safeJsonParse(match[1]);
+    if (parsed && isValidAction(parsed)) {
+      actions.push(normalizeAction(parsed));
+    }
+  }
+
+  if (actions.length > 0) return actions;
+
+  const parsed = safeJsonParse(text);
+  if (parsed && isValidAction(parsed)) {
+    actions.push(normalizeAction(parsed));
+  }
+
+  if (parsed && Array.isArray(parsed)) {
+    for (const item of parsed) {
+      if (isValidAction(item)) {
+        actions.push(normalizeAction(item));
+      }
+    }
+  }
+
+  return actions;
+}
+
+// ========================================================================
+// ========================================================================
+
+function safeJsonParse(text: string): any | null {
+  const trimmed = text.trim();
+
+  try {
+    return JSON.parse(trimmed);
+  } catch (_) {}
+
+  try {
+    const fixed = trimmed.replace(/,\s*([\]}])/g, '$1');
+    return JSON.parse(fixed);
+  } catch (_) {}
+
+  try {
+    const fixed = trimmed.replace(/'/g, '"');
+    return JSON.parse(fixed);
+  } catch (_) {}
+
+  try {
+    const objMatch = trimmed.match(/(\{[\s\S]*\})/);
+    if (objMatch) {
+      return JSON.parse(objMatch[1]);
+    }
+  } catch (_) {}
+
+  return null;
+}
+
+function isValidAction(obj: any): boolean {
+  if (!obj || typeof obj !== 'object') return false;
+  if (!obj.action) return false;
+  if (!obj.file && !obj.file_path && !obj.filePath) return false;
+  const validActions = ['write', 'create', 'update', 'patch', 'delete'];
+  return validActions.includes(obj.action.toLowerCase());
+}
+
+function normalizeAction(obj: any): AgentAction {
+  const action = obj.action.toLowerCase();
+  return {
+    action: action as AgentAction['action'],
+    file: obj.file || obj.file_path || obj.filePath || '',
+    content: obj.content || '',
+    patches: obj.patches || null,
+  };
+}
+
+// ========================================================================
+// ========================================================================
+
+export function applyPatches(
+  originalContent: string,
+  patches: PatchItem[]
+): string {
+  let result = originalContent;
+
+  for (const patch of patches) {
+    if (patch.find !== undefined && patch.replace !== undefined) {
+      const idx = result.indexOf(patch.find);
+      if (idx !== -1) {
+        result =
+          result.substring(0, idx) +
+          patch.replace +
+          result.substring(idx + patch.find.length);
+      } else {
+        const fuzzyIdx = fuzzyFind(result, patch.find);
+        if (fuzzyIdx.start !== -1) {
+          result =
+            result.substring(0, fuzzyIdx.start) +
+            patch.replace +
+            result.substring(fuzzyIdx.end);
+        } else {
+          throw new Error(
+            `Patch 失败：找不到要替换的代码段\n查找: "${patch.find.substring(0, 80)}..."`
+          );
+        }
+      }
+    } else if (patch.after !== undefined && patch.insert !== undefined) {
+      const idx = result.indexOf(patch.after);
+      if (idx !== -1) {
+        const insertPos = idx + patch.after.length;
+        const nextNewline = result.indexOf('\n', insertPos);
+        const actualPos =
+          nextNewline !== -1 ? nextNewline + 1 : insertPos;
+        result =
+          result.substring(0, actualPos) +
+          patch.insert +
+          '\n' +
+          result.substring(actualPos);
+      } else {
+        throw new Error(
+          `Patch 失败：找不到插入锚点\n查找: "${patch.after.substring(0, 80)}..."`
+        );
+      }
+    } else if (patch.before !== undefined && patch.insert !== undefined) {
+      const idx = result.indexOf(patch.before);
+      if (idx !== -1) {
+        result =
+          result.substring(0, idx) +
+          patch.insert +
+          '\n' +
+          result.substring(idx);
+      } else {
+        throw new Error(
+          `Patch 失败：找不到插入锚点\n查找: "${patch.before.substring(0, 80)}..."`
+        );
+      }
+    } else if (patch.delete !== undefined) {
+      const idx = result.indexOf(patch.delete);
+      if (idx !== -1) {
+        let endIdx = idx + patch.delete.length;
+        if (result[endIdx] === '\n') endIdx++;
+        result = result.substring(0, idx) + result.substring(endIdx);
+      }
+    }
+  }
+
+  return result;
+}
+
+// ========================================================================
+// ========================================================================
+
+interface FuzzyResult {
+  start: number;
+  end: number;
+}
+
+function fuzzyFind(haystack: string, needle: string): FuzzyResult {
+  const normalize = (s: string) =>
+    s
+      .split('\n')
+      .map((line) => line.trim())
+      .join('\n')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const normalizedNeedle = normalize(needle);
+  const normalizedHaystack = normalize(haystack);
+
+  const pos = normalizedHaystack.indexOf(normalizedNeedle);
+  if (pos === -1) {
+    return { start: -1, end: -1 };
+  }
+
+  let origStart = -1;
+  let origEnd = -1;
+  let normIdx = 0;
+
+  const needleLines = needle
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+  const haystackLines = haystack.split('\n');
+
+  for (let i = 0; i < haystackLines.length; i++) {
+    if (haystackLines[i].trim() === needleLines[0]) {
+      let allMatch = true;
+      for (let j = 1; j < needleLines.length; j++) {
+        if (
+          i + j >= haystackLines.length ||
+          haystackLines[i + j].trim() !== needleLines[j]
+        ) {
+          allMatch = false;
+          break;
+        }
+      }
+      if (allMatch) {
+        origStart = haystackLines
+          .slice(0, i)
+          .reduce((sum, l) => sum + l.length + 1, 0);
+        const endLine = i + needleLines.length - 1;
+        origEnd = haystackLines
+          .slice(0, endLine + 1)
+          .reduce((sum, l) => sum + l.length + 1, 0);
+        return { start: origStart, end: origEnd };
+      }
+    }
+  }
+
+  return { start: -1, end: -1 };
+}
+
+// ========================================================================
+// ========================================================================
+
+export function detectLazyOutput(content: string): string[] {
+  const warnings: string[] = [];
+
+  const lazyPatterns: Array<{ regex: RegExp; desc: string }> = [
+    {
+      regex: /\/\/\s*\.{3}\s*(existing|rest|remaining|其余|省略|原有|不变)/gi,
+      desc: '// ... existing code ...',
+    },
+    {
+      regex: /#\s*\.{3}\s*(existing|rest|remaining|其余|省略|原有|不变)/gi,
+      desc: '# ... existing code ...',
+    },
+    {
+      regex: /\/\*\s*\.{3}\s*(existing|rest|remaining|其余|省略|原有|不变)[\s\S]*?\*\
+      desc: '/* ... existing code ... */',
+    },
+    {
+      regex: /\.{3}\s*(此处|这里|此部分|上述|以下|其他|前面|后面)\s*(省略|不变|保持|跳过|同上)/gi,
+      desc: '...省略...',
+    },
+    {
+      regex: /\/\/\s*(same|unchanged|omitted|keep|skip)/gi,
+      desc: '// same/unchanged',
+    },
+  ];
+
+  for (const pattern of lazyPatterns) {
+    const matches = content.match(pattern.regex);
+    if (matches && matches.length > 0) {
+      warnings.push(
+        `检测到 ${matches.length} 处省略标记：${pattern.desc}`
+      );
+    }
+  }
+
+  return warnings;
+}
+
+################################################################################
+# [13/16] vscode-extension/src/diffManager.ts
+# Lines: 260  Size: 8,028 bytes
+################################################################################
+
+/**
+ * Diff 预览管理器
+ *
+ * 职责：
+ * 1. 生成临时文件对
+ * 2. 打开 VS Code 内置 Diff 编辑器
+ * 3. 处理用户的接受/拒绝选择
+ * 4. 修改前自动 Git 快照
+ */
+
+import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { execSync } from 'child_process';
+import {
+  AgentAction,
+  applyPatches,
+  detectLazyOutput,
+} from './codeApplier';
+
+const TEMP_DIR = path.join(os.tmpdir(), 'ai-code-agent-diff');
+
+/**
+ * 处理单个 Action，返回结果字符串
+ */
+export async function processAction(
+  action: AgentAction,
+  log: vscode.OutputChannel
+): Promise<string> {
+  const workspaceRoot =
+    vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+  if (!workspaceRoot) {
+    throw new Error('请先打开一个工作区文件夹');
+  }
+
+  const fullPath = path.resolve(workspaceRoot, action.file);
+  if (!fullPath.startsWith(workspaceRoot)) {
+    throw new Error(`安全拦截：路径越界 → ${action.file}`);
+  }
+
+  const dangerousPatterns = [
+    '.env',
+    '.git/',
+    'node_modules/',
+    '.ssh/',
+    'id_rsa',
+    'password',
+    'secret',
+  ];
+  const lowerFile = action.file.toLowerCase();
+  for (const pattern of dangerousPatterns) {
+    if (lowerFile.includes(pattern)) {
+      throw new Error(`安全拦截：禁止修改敏感文件 → ${action.file}`);
+    }
+  }
+
+  log.appendLine(`[DiffManager] Processing: ${action.action} → ${action.file}`);
+
+  if (action.action === 'delete') {
+    if (!fs.existsSync(fullPath)) {
+      return `⏭️ ${action.file}: 文件不存在，跳过删除`;
+    }
+
+    const confirm = await vscode.window.showWarningMessage(
+      `确认删除文件 ${action.file}？`,
+      { modal: true },
+      '🗑️ 确认删除',
+      '取消'
+    );
+
+    if (confirm === '🗑️ 确认删除') {
+      gitSnapshot(workspaceRoot, `删除 ${action.file} 之前的快照`);
+      fs.unlinkSync(fullPath);
+      log.appendLine(`[DiffManager] Deleted: ${action.file}`);
+      return `✅ ${action.file}: 已删除`;
+    }
+    return `⏭️ ${action.file}: 用户取消删除`;
+  }
+
+
+  let originalContent = '';
+  const fileExists = fs.existsSync(fullPath);
+  if (fileExists) {
+    originalContent = fs.readFileSync(fullPath, 'utf-8');
+  }
+
+  let newContent: string;
+
+  if (action.action === 'patch' && action.patches) {
+    if (!fileExists) {
+      throw new Error(`Patch 失败：文件 ${action.file} 不存在`);
+    }
+    newContent = applyPatches(originalContent, action.patches);
+  } else {
+    newContent = action.content;
+  }
+
+  const lazyWarnings = detectLazyOutput(newContent);
+  if (lazyWarnings.length > 0) {
+    const warningMsg = lazyWarnings.join('\n');
+    const choice = await vscode.window.showWarningMessage(
+      `⚠️ AI 输出中包含省略标记：\n${warningMsg}\n\n直接应用可能导致代码丢失。`,
+      { modal: true },
+      '仍然应用（我知道风险）',
+      '放弃'
+    );
+    if (choice !== '仍然应用（我知道风险）') {
+      return `⏭️ ${action.file}: 检测到省略标记，用户放弃`;
+    }
+  }
+
+  if (originalContent === newContent) {
+    vscode.window.showInformationMessage(
+      `${action.file}: 内容无变化，跳过`
+    );
+    return `⏭️ ${action.file}: 内容无变化`;
+  }
+
+  const requireConfirmation = vscode.workspace
+    .getConfiguration('aiCodeAgent')
+    .get<boolean>('requireConfirmation', true);
+
+  if (requireConfirmation) {
+    const accepted = await showDiffAndConfirm(
+      fullPath,
+      action.file,
+      originalContent,
+      newContent,
+      fileExists
+    );
+
+    if (!accepted) {
+      return `⏭️ ${action.file}: 用户拒绝`;
+    }
+  }
+
+  const autoGit = vscode.workspace
+    .getConfiguration('aiCodeAgent')
+    .get<boolean>('autoGitSnapshot', true);
+
+  if (autoGit) {
+    gitSnapshot(workspaceRoot, `修改 ${action.file} 之前`);
+  }
+
+  const dir = path.dirname(fullPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(fullPath, newContent, 'utf-8');
+  log.appendLine(`[DiffManager] Written: ${action.file}`);
+
+  const doc = await vscode.workspace.openTextDocument(fullPath);
+  await vscode.window.showTextDocument(doc, { preview: false });
+
+  return `✅ ${action.file}: 已应用`;
+}
+
+// ========================================================================
+// ========================================================================
+
+async function showDiffAndConfirm(
+  fullPath: string,
+  relativePath: string,
+  originalContent: string,
+  newContent: string,
+  fileExists: boolean
+): Promise<boolean> {
+  if (!fs.existsSync(TEMP_DIR)) {
+    fs.mkdirSync(TEMP_DIR, { recursive: true });
+  }
+
+  const timestamp = Date.now();
+  const baseName = path.basename(relativePath);
+
+  const originalTempPath = path.join(
+    TEMP_DIR,
+    `original_${timestamp}_${baseName}`
+  );
+  const newTempPath = path.join(
+    TEMP_DIR,
+    `modified_${timestamp}_${baseName}`
+  );
+
+  fs.writeFileSync(originalTempPath, originalContent, 'utf-8');
+  fs.writeFileSync(newTempPath, newContent, 'utf-8');
+
+  const originalUri = vscode.Uri.file(originalTempPath);
+  const newUri = vscode.Uri.file(newTempPath);
+
+  const title = fileExists
+    ? `AI 修改预览: ${relativePath}  (当前 ↔ AI建议)`
+    : `AI 新建文件: ${relativePath}`;
+
+  await vscode.commands.executeCommand(
+    'vscode.diff',
+    originalUri,
+    newUri,
+    title
+  );
+
+  const choice = await vscode.window.showInformationMessage(
+    `是否接受 AI 对 "${relativePath}" 的修改？\n` +
+      `${fileExists ? '（将覆盖现有文件）' : '（将创建新文件）'}`,
+    { modal: false },
+    '✅ 接受',
+    '❌ 拒绝',
+    '👁️ 继续查看'
+  );
+
+  if (choice === '👁️ 继续查看') {
+    const secondChoice = await vscode.window.showInformationMessage(
+      `${relativePath}: 确认操作`,
+      { modal: true },
+      '✅ 接受',
+      '❌ 拒绝'
+    );
+    cleanup();
+    return secondChoice === '✅ 接受';
+  }
+
+  cleanup();
+  return choice === '✅ 接受';
+
+  function cleanup() {
+    try {
+      fs.unlinkSync(originalTempPath);
+    } catch (_) {}
+    try {
+      fs.unlinkSync(newTempPath);
+    } catch (_) {}
+  }
+}
+
+// ========================================================================
+// ========================================================================
+
+function gitSnapshot(workspaceRoot: string, message: string) {
+  try {
+    execSync('git rev-parse --is-inside-work-tree', {
+      cwd: workspaceRoot,
+      stdio: 'ignore',
+    });
+
+    execSync('git add -A', {
+      cwd: workspaceRoot,
+      stdio: 'ignore',
+    });
+
+    execSync(
+      `git commit -m "AI-Agent: ${message}" --allow-empty --no-verify`,
+      {
+        cwd: workspaceRoot,
+        stdio: 'ignore',
+      }
+    );
+  } catch (_) {
+  }
+}
+
+################################################################################
+# [14/16] vscode-extension/src/extension.ts
+# Lines: 163  Size: 6,977 bytes
+################################################################################
+
+import * as vscode from 'vscode';
+import { execSync } from 'child_process';
+import { AgentServer } from './server';
+
+let server: AgentServer | null = null;
+let outputChannel: vscode.OutputChannel;
+let statusBar: vscode.StatusBarItem;
+
+export function activate(context: vscode.ExtensionContext) {
+  outputChannel = vscode.window.createOutputChannel('AI Code Agent');
+  outputChannel.appendLine('[AI Code Agent] 扩展已激活');
+
+  statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusBar.command = 'aiCodeAgent.startServer';
+  context.subscriptions.push(statusBar);
+
+  function updateStatusBar(running: boolean, wsCount = 0) {
+    const port = vscode.workspace.getConfiguration('aiCodeAgent').get<number>('port', 9960);
+    if (running) {
+      statusBar.text = `$(radio-tower) AI Agent :${port}${wsCount > 0 ? ` (${wsCount})` : ''}`;
+      statusBar.tooltip = `AI Code Agent 运行中\n端口: ${port}\nWebSocket 客户端: ${wsCount}\n点击重启`;
+      statusBar.backgroundColor = undefined;
+    } else {
+      statusBar.text = '$(circle-slash) AI Agent 未运行';
+      statusBar.tooltip = '点击启动 AI Code Agent';
+      statusBar.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    }
+    statusBar.show();
+  }
+
+  const startCmd = vscode.commands.registerCommand('aiCodeAgent.startServer', async () => {
+    if (server) { server.stop(); server = null; }
+
+    const port = vscode.workspace.getConfiguration('aiCodeAgent').get<number>('port', 9960);
+    server = new AgentServer(port, outputChannel);
+
+    try {
+      await server.start();
+      updateStatusBar(true, 0);
+      vscode.window.showInformationMessage(`AI Code Agent 已启动（端口 ${port}）`);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`AI Code Agent 启动失败: ${err.message}`);
+      updateStatusBar(false);
+    }
+  });
+
+  const stopCmd = vscode.commands.registerCommand('aiCodeAgent.stopServer', () => {
+    if (server) { server.stop(); server = null; }
+    updateStatusBar(false);
+    vscode.window.showInformationMessage('AI Code Agent 已停止');
+  });
+
+  const undoCmd = vscode.commands.registerCommand('aiCodeAgent.undoLastChange', async () => {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!root) { vscode.window.showWarningMessage('请先打开一个工作区'); return; }
+    try {
+      const log = execSync('git log --oneline -5 --grep="AI-Agent"', { cwd: root, encoding: 'utf-8' }).trim();
+      if (!log) { vscode.window.showInformationMessage('没有找到 AI Agent 的修改记录'); return; }
+      const confirm = await vscode.window.showWarningMessage(
+        `最近的 AI 修改：\n${log}\n\n确认回退？`,
+        { modal: true }, '确认回退'
+      );
+      if (confirm === '确认回退') {
+        execSync('git reset --soft HEAD~1', { cwd: root, encoding: 'utf-8' });
+        vscode.window.showInformationMessage('已回退上一次 AI 修改');
+      }
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Git 操作失败: ${err.message}`);
+    }
+  });
+
+  const openLogCmd = vscode.commands.registerCommand('aiCodeAgent.openLog', () => {
+    outputChannel.show(true);
+  });
+
+  const sendFileCmd = vscode.commands.registerCommand('aiCodeAgent.sendCurrentFile', () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) { vscode.window.showWarningMessage('请先打开一个文件'); return; }
+    if (!server) { vscode.window.showWarningMessage('AI Agent 服务器未运行'); return; }
+
+    const file = vscode.workspace.asRelativePath(editor.document.uri);
+    const content = editor.document.getText();
+    const language = editor.document.languageId;
+
+    server.broadcast({
+      type: 'inject-to-input',
+      mode: 'file',
+      file,
+      content,
+      language,
+      message: `以下是当前文件 \`${file}\` 的完整内容：\n\`\`\`${language}\n${content}\n\`\`\`\n`,
+    });
+
+    vscode.window.showInformationMessage(`已发送文件 ${file} 到浏览器`);
+  });
+
+  const sendSelectionCmd = vscode.commands.registerCommand('aiCodeAgent.sendSelection', () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) { vscode.window.showWarningMessage('请先打开一个文件'); return; }
+    if (!server) { vscode.window.showWarningMessage('AI Agent 服务器未运行'); return; }
+
+    const selection = editor.selection;
+    if (selection.isEmpty) { vscode.window.showWarningMessage('请先选中要发送的代码'); return; }
+
+    const file = vscode.workspace.asRelativePath(editor.document.uri);
+    const content = editor.document.getText(selection);
+    const language = editor.document.languageId;
+    const startLine = selection.start.line + 1;
+    const endLine = selection.end.line + 1;
+
+    server.broadcast({
+      type: 'inject-to-input',
+      mode: 'selection',
+      file,
+      content,
+      language,
+      startLine,
+      endLine,
+      message: `以下是 \`${file}\` 第 ${startLine}-${endLine} 行的代码：\n\`\`\`${language}\n${content}\n\`\`\`\n`,
+    });
+
+    vscode.window.showInformationMessage(`已发送选中代码（${endLine - startLine + 1} 行）到浏览器`);
+  });
+
+  const sendErrorCmd = vscode.commands.registerCommand('aiCodeAgent.sendError', async () => {
+    if (!server) { vscode.window.showWarningMessage('AI Agent 服务器未运行'); return; }
+
+    const errorText = await vscode.window.showInputBox({
+      prompt: '粘贴错误信息',
+      placeHolder: 'Traceback (most recent call last)...',
+      ignoreFocusOut: true,
+    });
+    if (!errorText) return;
+
+    const editor = vscode.window.activeTextEditor;
+    const file = editor ? vscode.workspace.asRelativePath(editor.document.uri) : '未知文件';
+
+    server.broadcast({
+      type: 'inject-to-input',
+      mode: 'error',
+      file,
+      errorText,
+      message: `运行 \`${file}\` 时出现以下错误，请帮我修复：\n\`\`\`\n${errorText}\n\`\`\`\n`,
+    });
+
+    vscode.window.showInformationMessage('错误信息已发送到浏览器');
+  });
+
+  context.subscriptions.push(
+    startCmd, stopCmd, undoCmd, openLogCmd,
+    sendFileCmd, sendSelectionCmd, sendErrorCmd
+  );
+
+  if (vscode.workspace.getConfiguration('aiCodeAgent').get<boolean>('autoStart', true)) {
+    vscode.commands.executeCommand('aiCodeAgent.startServer');
+  } else {
+    updateStatusBar(false);
+  }
+}
+
+export function deactivate() {
+  if (server) { server.stop(); }
+}
+
+################################################################################
+# [15/16] vscode-extension/src/historyManager.ts
+# Lines: 61  Size: 1,334 bytes
+################################################################################
+
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+
+export interface HistoryItem {
+  id: string;
+  file: string;
+  action: string;
+  accepted: boolean;
+  timestamp: number;
+  timeStr: string;
+}
+
+const HISTORY_FILE = path.join(os.tmpdir(), 'ai-code-agent-history.json');
+const MAX_ITEMS = 200;
+
+export class HistoryManager {
+  private items: HistoryItem[] = [];
+
+  constructor() {
+    this.load();
+  }
+
+  add(item: Omit<HistoryItem, 'id' | 'timeStr'>) {
+    const full: HistoryItem = {
+      ...item,
+      id: Math.random().toString(36).slice(2),
+      timeStr: new Date(item.timestamp).toLocaleString('zh-CN'),
+    };
+    this.items.unshift(full);
+    if (this.items.length > MAX_ITEMS) {
+      this.items = this.items.slice(0, MAX_ITEMS);
+    }
+    this.save();
+  }
+
+  getRecent(count: number): HistoryItem[] {
+    return this.items.slice(0, count);
+  }
+
+  clear() {
+    this.items = [];
+    this.save();
+  }
+
+  private save() {
+    try {
+      fs.writeFileSync(HISTORY_FILE, JSON.stringify(this.items), 'utf-8');
+    } catch (_) {}
+  }
+
+  private load() {
+    try {
+      if (fs.existsSync(HISTORY_FILE)) {
+        this.items = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf-8'));
+      }
+    } catch (_) {
+      this.items = [];
+    }
+  }
+}
+
+################################################################################
+# [16/16] vscode-extension/src/server.ts
+# Lines: 563  Size: 18,528 bytes
+################################################################################
+
+/**
+ * AI Code Agent - 服务器（HTTP + WebSocket 双协议）
+ *
+ * HTTP  /status  /apply  /apply-text  /restart  /undo  /open-log
+ * WS    ws:
+ */
+
+import * as http from 'http';
+import * as vscode from 'vscode';
+import { parseActionsFromText, AgentAction } from './codeApplier';
+import { processAction } from './diffManager';
+import { HistoryManager } from './historyManager';
+import { execSync } from 'child_process';
+
+interface WSClient {
+  socket: import('net').Socket;
+  id: string;
+  alive: boolean;
+}
+
+export class AgentServer {
+  private httpServer: http.Server | null = null;
+  private wsClients: Map<string, WSClient> = new Map();
+  private port: number;
+  private log: vscode.OutputChannel;
+  public history: HistoryManager;
+  private pingInterval: NodeJS.Timeout | null = null;
+
+  constructor(port: number, log: vscode.OutputChannel) {
+    this.port = port;
+    this.log = log;
+    this.history = new HistoryManager();
+  }
+
+  async start(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.httpServer = http.createServer((req, res) => {
+        this.handleHttp(req, res);
+      });
+
+this.httpServer.on('upgrade', (req: http.IncomingMessage, socket: any, head: Buffer) => {
+  if (req.url === '/ws') {
+    this.handleWSUpgrade(socket, head);
+  } else {
+    socket.destroy();
+  }
+});
+
+      this.httpServer.on('error', (err: any) => {
+        if (err.code === 'EADDRINUSE') {
+          reject(new Error(`端口 ${this.port} 已被占用，请修改端口或关闭占用程序`));
+        } else {
+          reject(err);
+        }
+      });
+
+      this.httpServer.listen(this.port, '127.0.0.1', () => {
+        this.log.appendLine(`[Server] HTTP+WS 服务器启动：127.0.0.1:${this.port}`);
+        this.pingInterval = setInterval(() => this.pingClients(), 20000);
+        resolve();
+      });
+    });
+  }
+
+  stop() {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+    this.wsClients.forEach((client) => {
+      try { client.socket.destroy(); } catch (_) {}
+    });
+    this.wsClients.clear();
+    if (this.httpServer) {
+      this.httpServer.close();
+      this.httpServer = null;
+      this.log.appendLine('[Server] 服务器已停止');
+    }
+  }
+
+  // ======================================================================
+  // ======================================================================
+
+  private handleWSUpgrade(
+    socket: import('net').Socket,
+    head: Buffer
+  ) {
+    const { createHash } = require('crypto');
+    const id = Math.random().toString(36).slice(2);
+
+    let headerStr = head.toString();
+    let headerBuffer = Buffer.alloc(0);
+
+    const onData = (chunk: Buffer) => {
+      headerBuffer = Buffer.concat([headerBuffer, chunk]);
+      const str = headerBuffer.toString();
+      const keyMatch = str.match(/Sec-WebSocket-Key:\s*(.+)\r\n/i);
+      if (!keyMatch) return;
+
+      socket.removeListener('data', onData);
+      const key = keyMatch[1].trim();
+      const acceptKey = createHash('sha1')
+        .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+        .digest('base64');
+
+      socket.write(
+        'HTTP/1.1 101 Switching Protocols\r\n' +
+        'Upgrade: websocket\r\n' +
+        'Connection: Upgrade\r\n' +
+        `Sec-WebSocket-Accept: ${acceptKey}\r\n\r\n`
+      );
+
+      const client: WSClient = { socket, id, alive: true };
+      this.wsClients.set(id, client);
+      this.log.appendLine(`[WS] 客户端连接: ${id} (共 ${this.wsClients.size} 个)`);
+
+      const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+      this.sendToClient(client, {
+        type: 'connected',
+        workspace,
+        version: '2.0.0',
+      });
+
+      socket.on('data', (data) => this.handleWSMessage(client, data));
+      socket.on('close', () => {
+        this.wsClients.delete(id);
+        this.log.appendLine(`[WS] 客户端断开: ${id}`);
+      });
+      socket.on('error', () => {
+        this.wsClients.delete(id);
+      });
+    };
+
+    socket.on('data', onData);
+    if (head.length > 0) {
+      socket.emit('data', head);
+    }
+  }
+
+  private handleWSMessage(client: WSClient, data: Buffer) {
+    try {
+      const message = this.decodeWSFrame(data);
+      if (!message) return;
+
+      if (message.opcode === 0x8) {
+        client.socket.destroy();
+        this.wsClients.delete(client.id);
+        return;
+      }
+      if (message.opcode === 0x9) {
+        this.sendRawFrame(client.socket, Buffer.alloc(0), 0xA);
+        return;
+      }
+      if (message.opcode === 0xA) {
+        // Pong
+        client.alive = true;
+        return;
+      }
+
+      const text = message.payload.toString('utf8');
+      let parsed: any;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        this.log.appendLine(`[WS] 无法解析消息: ${text.slice(0, 100)}`);
+        return;
+      }
+
+      this.handleWSCommand(client, parsed);
+    } catch (err: any) {
+      this.log.appendLine(`[WS] 消息处理错误: ${err.message}`);
+    }
+  }
+
+  private async handleWSCommand(client: WSClient, cmd: any) {
+    this.log.appendLine(`[WS] 收到命令: ${cmd.type}`);
+
+    switch (cmd.type) {
+      case 'apply':
+        if (cmd.actions && cmd.actions.length > 0) {
+          this.sendToClient(client, {
+            type: 'ack',
+            reqId: cmd.reqId,
+            message: `正在处理 ${cmd.actions.length} 个操作`,
+          });
+          this.processActionsAsync(cmd.actions, client);
+        }
+        break;
+
+      case 'apply-text':
+        const actions = parseActionsFromText(cmd.text || '');
+        if (actions.length > 0) {
+          this.sendToClient(client, {
+            type: 'ack',
+            reqId: cmd.reqId,
+            message: `解析到 ${actions.length} 个操作，正在处理`,
+          });
+          this.processActionsAsync(actions, client);
+        } else {
+          await this.handleManualCode(cmd.text || '');
+          this.sendToClient(client, {
+            type: 'ack',
+            reqId: cmd.reqId,
+            message: '未识别到结构化操作，已在 VS Code 中打开',
+          });
+        }
+        break;
+
+      case 'get-status':
+        const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+        this.sendToClient(client, {
+          type: 'status',
+          workspace,
+          history: this.history.getRecent(10),
+        });
+        break;
+
+      case 'undo':
+        await this.doUndo();
+        this.sendToClient(client, { type: 'undo-done', reqId: cmd.reqId });
+        break;
+
+      case 'get-history':
+        this.sendToClient(client, {
+          type: 'history',
+          items: this.history.getRecent(50),
+        });
+        break;
+
+      case 'pong':
+        client.alive = true;
+        break;
+
+      case 'get-current-file':
+        const editor = vscode.window.activeTextEditor;
+        if (editor) {
+          this.sendToClient(client, {
+            type: 'current-file',
+            reqId: cmd.reqId,
+            file: vscode.workspace.asRelativePath(editor.document.uri),
+            content: editor.document.getText(),
+            language: editor.document.languageId,
+          });
+        } else {
+          this.sendToClient(client, {
+            type: 'error',
+            reqId: cmd.reqId,
+            message: '当前没有打开的文件',
+          });
+        }
+        break;
+
+      case 'get-selection':
+        const sel = vscode.window.activeTextEditor;
+        if (sel && !sel.selection.isEmpty) {
+          const selText = sel.document.getText(sel.selection);
+          const fileName = vscode.workspace.asRelativePath(sel.document.uri);
+          this.sendToClient(client, {
+            type: 'selection',
+            reqId: cmd.reqId,
+            file: fileName,
+            content: selText,
+            language: sel.document.languageId,
+            startLine: sel.selection.start.line + 1,
+            endLine: sel.selection.end.line + 1,
+          });
+        } else {
+          this.sendToClient(client, {
+            type: 'error',
+            reqId: cmd.reqId,
+            message: '当前没有选中任何文本',
+          });
+        }
+        break;
+    }
+  }
+
+  broadcast(data: any) {
+    this.wsClients.forEach((client) => {
+      this.sendToClient(client, data);
+    });
+  }
+
+  private sendToClient(client: WSClient, data: any) {
+    try {
+      const text = JSON.stringify(data);
+      const payload = Buffer.from(text, 'utf8');
+      this.sendRawFrame(client.socket, payload, 0x1);
+    } catch (_) {}
+  }
+
+  private sendRawFrame(
+    socket: import('net').Socket,
+    payload: Buffer,
+    opcode: number
+  ) {
+    const len = payload.length;
+    let header: Buffer;
+    if (len < 126) {
+      header = Buffer.alloc(2);
+      header[0] = 0x80 | opcode;
+      header[1] = len;
+    } else if (len < 65536) {
+      header = Buffer.alloc(4);
+      header[0] = 0x80 | opcode;
+      header[1] = 126;
+      header.writeUInt16BE(len, 2);
+    } else {
+      header = Buffer.alloc(10);
+      header[0] = 0x80 | opcode;
+      header[1] = 127;
+      header.writeBigUInt64BE(BigInt(len), 2);
+    }
+    try {
+      socket.write(Buffer.concat([header, payload]));
+    } catch (_) {}
+  }
+
+  private decodeWSFrame(
+    data: Buffer
+  ): { opcode: number; payload: Buffer } | null {
+    if (data.length < 2) return null;
+    const opcode = data[0] & 0x0f;
+    const masked = (data[1] & 0x80) !== 0;
+    let payloadLen = data[1] & 0x7f;
+    let offset = 2;
+
+    if (payloadLen === 126) {
+      if (data.length < 4) return null;
+      payloadLen = data.readUInt16BE(2);
+      offset = 4;
+    } else if (payloadLen === 127) {
+      if (data.length < 10) return null;
+      payloadLen = Number(data.readBigUInt64BE(2));
+      offset = 10;
+    }
+
+    let payload: Buffer;
+    if (masked) {
+      const mask = data.slice(offset, offset + 4);
+      offset += 4;
+      payload = Buffer.alloc(payloadLen);
+      for (let i = 0; i < payloadLen; i++) {
+        payload[i] = data[offset + i] ^ mask[i % 4];
+      }
+    } else {
+      payload = data.slice(offset, offset + payloadLen);
+    }
+
+    return { opcode, payload };
+  }
+
+  private pingClients() {
+    this.wsClients.forEach((client, id) => {
+      if (!client.alive) {
+        client.socket.destroy();
+        this.wsClients.delete(id);
+        return;
+      }
+      client.alive = false;
+      this.sendRawFrame(client.socket, Buffer.alloc(0), 0x9);
+    });
+  }
+
+  // ======================================================================
+  // ======================================================================
+
+  private handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+
+    const json = (data: any, code = 200) => {
+      res.writeHead(code, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(data));
+    };
+
+    if (req.method === 'GET' && req.url === '/status') {
+      json({
+        status: 'running',
+        workspace: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
+        wsClients: this.wsClients.size,
+        version: '2.0.0',
+      });
+      return;
+    }
+
+    if (req.method === 'POST') {
+      let body = '';
+      req.on('data', (c) => (body += c.toString()));
+      req.on('end', async () => {
+        try {
+          const data = JSON.parse(body || '{}');
+
+          if (req.url === '/apply') {
+            const actions: AgentAction[] = data.actions || [];
+            if (actions.length === 0) { json({ status: 'error', message: '无有效操作' }, 400); return; }
+            this.processActionsAsync(actions, null);
+            json({ status: 'success', message: `正在处理 ${actions.length} 个操作`, count: actions.length });
+            return;
+          }
+
+          if (req.url === '/apply-text') {
+            const text = data.text || '';
+            const actions = parseActionsFromText(text);
+            if (actions.length > 0) {
+              this.processActionsAsync(actions, null);
+              json({ status: 'success', message: `解析到 ${actions.length} 个操作，正在处理` });
+            } else {
+              await this.handleManualCode(text);
+              json({ status: 'success', message: '已在 VS Code 中打开，请指定文件路径' });
+            }
+            return;
+          }
+
+          if (req.url === '/restart') {
+            json({ status: 'success', message: '重启中...' });
+            setTimeout(() => vscode.commands.executeCommand('aiCodeAgent.startServer'), 300);
+            return;
+          }
+
+          if (req.url === '/undo') {
+            await this.doUndo();
+            json({ status: 'success', message: '撤销操作已执行' });
+            return;
+          }
+
+          if (req.url === '/open-log') {
+            vscode.commands.executeCommand('aiCodeAgent.openLog');
+            json({ status: 'success' });
+            return;
+          }
+
+          if (req.url === '/switch-workspace') {
+            const targetPath = data.path;
+            if (!targetPath) { json({ status: 'error', message: '缺少 path 参数' }, 400); return; }
+            const uri = vscode.Uri.file(targetPath);
+            await vscode.commands.executeCommand('vscode.openFolder', uri, false);
+            json({ status: 'success', message: `已切换到 ${targetPath}` });
+            return;
+          }
+
+          json({ status: 'error', message: '未知路由' }, 404);
+        } catch (err: any) {
+          json({ status: 'error', message: err.message }, 400);
+        }
+      });
+      return;
+    }
+
+    res.writeHead(404); res.end('Not Found');
+  }
+
+  // ======================================================================
+  // ======================================================================
+
+  private async processActionsAsync(
+    actions: AgentAction[],
+    client: WSClient | null
+  ) {
+    const results: Array<{ file: string; result: string; accepted: boolean }> = [];
+
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+
+      if (client) {
+        this.sendToClient(client, {
+          type: 'progress',
+          current: i + 1,
+          total: actions.length,
+          file: action.file,
+          action: action.action,
+        });
+      }
+
+      try {
+        const result = await processAction(action, this.log);
+        const accepted = result.startsWith('✅');
+        results.push({ file: action.file, result, accepted });
+
+        this.history.add({
+          file: action.file,
+          action: action.action,
+          accepted,
+          timestamp: Date.now(),
+        });
+
+        if (client) {
+          this.sendToClient(client, {
+            type: 'action-result',
+            file: action.file,
+            result,
+            accepted,
+          });
+        }
+      } catch (err: any) {
+        const errMsg = `❌ ${action.file}: ${err.message}`;
+        results.push({ file: action.file, result: errMsg, accepted: false });
+        this.log.appendLine(`[Server] 错误: ${err.message}`);
+
+        if (client) {
+          this.sendToClient(client, {
+            type: 'action-result',
+            file: action.file,
+            result: errMsg,
+            accepted: false,
+          });
+        }
+      }
+    }
+
+    const accepted = results.filter((r) => r.accepted).length;
+    const rejected = results.filter((r) => !r.accepted && r.result.startsWith('⏭️')).length;
+    const failed   = results.filter((r) => r.result.startsWith('❌')).length;
+
+    const summary = `处理完成：✅${accepted} 接受  ⏭️${rejected} 跳过  ❌${failed} 失败`;
+    vscode.window.showInformationMessage(`AI Agent: ${summary}`);
+
+    if (client) {
+      this.sendToClient(client, { type: 'done', summary, results });
+    }
+
+    this.broadcast({
+      type: 'history-updated',
+      history: this.history.getRecent(20),
+    });
+  }
+
+  private async doUndo() {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
+      vscode.window.showWarningMessage('请先打开一个工作区');
+      return;
+    }
+    try {
+      execSync('git reset --soft HEAD~1', { cwd: workspaceRoot, encoding: 'utf-8' });
+      vscode.window.showInformationMessage('AI Agent: 已撤销上一次 AI 修改');
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`撤销失败: ${err.message}`);
+    }
+  }
+
+  private async handleManualCode(code: string) {
+    const filePath = await vscode.window.showInputBox({
+      prompt: '请输入目标文件路径（相对于工作区）',
+      placeHolder: 'src/main.py',
+    });
+    if (!filePath) {
+      const doc = await vscode.workspace.openTextDocument({ content: code });
+      await vscode.window.showTextDocument(doc);
+      return;
+    }
+    const action: AgentAction = {
+      action: 'write',
+      file: filePath.trim(),
+      content: code,
+      patches: null,
+    };
+    processAction(action, this.log);
+  }
+}
+
+================================================================================
+Total files: 16
+Total lines: 3,309
+================================================================================
