@@ -392,16 +392,29 @@
 
     // ======================== MutationObserver ========================
 
-    var scanTimeout = null;
-    var observer = new MutationObserver(function(mutations) {
-        if (!extensionEnabled || !autoScanEnabled) return;
-        var hasNewNodes = mutations.some(function(m) { return m.addedNodes.length > 0; });
-        if (!hasNewNodes) return;
-        if (scanTimeout) clearTimeout(scanTimeout);
-        scanTimeout = setTimeout(scanPage, 800);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
+var scanTimeout = null;
+ var observer = new MutationObserver(function(mutations) {
+  if (!extensionEnabled || !autoScanEnabled) return;
+  var hasRelevantNodes = false;
+  for (var mi = 0; mi < mutations.length; mi++) {
+   var added = mutations[mi].addedNodes;
+   for (var ni = 0; ni < added.length; ni++) {
+    var node = added[ni];
+    if (node.nodeType === 1) {
+     if (node.tagName === 'PRE' || node.tagName === 'CODE' ||
+       node.querySelector && (node.querySelector('pre') || node.querySelector('code'))) {
+      hasRelevantNodes = true;
+      break;
+     }
+    }
+   }
+   if (hasRelevantNodes) break;
+  }
+  if (!hasRelevantNodes) return;
+  if (scanTimeout) clearTimeout(scanTimeout);
+  scanTimeout = setTimeout(scanPage, 800);
+ });
+ observer.observe(document.body, { childList: true, subtree: true });
     // ======================== 浮动按钮 ========================
 
     var floatingContainer = null;
