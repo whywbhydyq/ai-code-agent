@@ -1,15 +1,15 @@
 (function () {
     'use strict';
 
-    const PROCESSED_ATTR = 'data-aca-processed';
-    const BUTTON_CLASS = 'aca-apply-btn';
-    const ACTION_KEYWORDS = ['"action"', '"file"'];
-    const ACTION_VALUES = ['write', 'patch', 'create', 'update', 'delete'];
+    var PROCESSED_ATTR = 'data-aca-processed';
+    var BUTTON_CLASS = 'aca-apply-btn';
+    var ACTION_KEYWORDS = ['"action"', '"file"'];
+    var ACTION_VALUES = ['write', 'patch', 'create', 'update', 'delete'];
 
-    let extensionEnabled = true;
-    let autoScanEnabled = true;
+    var extensionEnabled = true;
+    var autoScanEnabled = true;
 
-    chrome.storage.local.get(['extensionEnabled', 'autoScan'], (result) => {
+    chrome.storage.local.get(['extensionEnabled', 'autoScan'], function(result) {
         extensionEnabled = result.extensionEnabled !== false;
         autoScanEnabled = result.autoScan !== false;
         if (extensionEnabled && autoScanEnabled) {
@@ -85,6 +85,44 @@
             content: obj.content || '',
             patches: obj.patches || null,
         };
+    }
+
+    // ======================== 智能过滤 ========================
+
+    // 判断文本是否像终端命令 / 非代码内容，不该加按钮
+    function looksLikeTerminalOrShort(text) {
+        var trimmed = text.trim();
+        var lines = trimmed.split('\n');
+
+        // 少于 3 行不加按钮
+        if (lines.length < 3) return true;
+
+        // 少于 80 字符不加按钮
+        if (trimmed.length < 80) return true;
+
+        // 所有行都以 $ 或 > 或 # 开头 → 终端命令
+        var terminalLines = lines.filter(function(l) {
+            var s = l.trim();
+            return s.startsWith('$') || s.startsWith('>') || s.startsWith('#') || s.startsWith('PS ');
+        });
+        if (terminalLines.length > lines.length * 0.6) return true;
+
+        // 常见命令关键词占大多数 → 终端
+        var cmdPatterns = [
+            /^(cd|ls|dir|mkdir|rm|cp|mv|cat|echo|npm|npx|yarn|pnpm|git|pip|python|node|cargo|go |docker|kubectl|brew|apt|sudo|chmod|chown|curl|wget)\s/i,
+        ];
+        var cmdCount = 0;
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim();
+            if (!line) continue;
+            for (var j = 0; j < cmdPatterns.length; j++) {
+                if (cmdPatterns[j].test(line)) { cmdCount++; break; }
+            }
+        }
+        var nonEmptyLines = lines.filter(function(l) { return l.trim().length > 0; }).length;
+        if (nonEmptyLines > 0 && cmdCount / nonEmptyLines > 0.5) return true;
+
+        return false;
     }
 
     // ======================== 通信 ========================
@@ -230,13 +268,15 @@
             var target = el.tagName === 'CODE' ? (el.closest('pre') || el) : el;
 
             if (actions.length > 0) {
+                // agent-action 代码块始终显示按钮
                 if (processedParents.has(target)) return;
                 processedParents.add(target);
                 addApplyButton(target, actions);
             } else if (
                 (el.tagName === 'PRE' || el.tagName === 'CODE') &&
-                text.trim().length > 30
+                !looksLikeTerminalOrShort(text)
             ) {
+                // 只给看起来像真正代码的块加手动按钮
                 if (processedParents.has(target)) return;
                 processedParents.add(target);
                 addManualButton(target);
@@ -286,9 +326,7 @@
     }
 
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            removeFloatingBtn();
-        }
+        if (e.key === 'Escape') removeFloatingBtn();
     });
 
     document.addEventListener('mouseup', function(e) {
@@ -296,9 +334,7 @@
         if (
             e.target.closest('.aca-floating-container') ||
             e.target.classList.contains(BUTTON_CLASS)
-        ) {
-            return;
-        }
+        ) return;
 
         removeFloatingBtn();
 
@@ -306,11 +342,15 @@
             var selection = window.getSelection();
             if (!selection || selection.rangeCount === 0) return;
             var text = selection.toString().trim();
+
+            // 选中内容太短不显示
             if (text.length < 15) return;
+
+            // 选中内容看起来像终端命令也不显示
+            if (looksLikeTerminalOrShort(text)) return;
 
             var range = selection.getRangeAt(0);
             var rect = range.getBoundingClientRect();
-
             var btnTop = Math.max(rect.top - 44, 8);
             var btnLeft = Math.min(Math.max(rect.left, 8), window.innerWidth - 220);
 
@@ -372,9 +412,7 @@
     });
 
     document.addEventListener('mousedown', function(e) {
-        if (floatingContainer && !floatingContainer.contains(e.target)) {
-            removeFloatingBtn();
-        }
+        if (floatingContainer && !floatingContainer.contains(e.target)) removeFloatingBtn();
     });
 
     // ======================== 启用/禁用 ========================
@@ -398,7 +436,7 @@
         if (!ws) wsConnect();
     }
 
-    // ======================== 消息监听 ========================
+    // ======================== 消息 ========================
 
     chrome.runtime.onMessage.addListener(function(message) {
         if (message.type === 'scan-and-send-all') {
@@ -420,22 +458,15 @@
                 );
             });
         }
-
         if (message.type === 'show-notification') {
             showNotification(message.message, message.success);
         }
-
         if (message.type === 'toggle-auto-scan') {
             autoScanEnabled = message.enabled;
             if (autoScanEnabled && extensionEnabled) scanPage();
         }
-
         if (message.type === 'toggle-extension') {
-            if (message.enabled) {
-                enableExtension();
-            } else {
-                disableExtension();
-            }
+            if (message.enabled) { enableExtension(); } else { disableExtension(); }
         }
     });
 
@@ -444,12 +475,10 @@
     function showNotification(text, success) {
         var existing = document.querySelector('.aca-notification');
         if (existing) existing.remove();
-
         var notif = document.createElement('div');
         notif.className = 'aca-notification ' + (success ? 'aca-notif-success' : 'aca-notif-error');
         notif.textContent = text;
         document.body.appendChild(notif);
-
         setTimeout(function() {
             notif.style.transition = 'all 0.5s ease';
             notif.style.opacity = '0';
@@ -475,23 +504,14 @@
             var port = r.serverPort || 9960;
             try {
                 ws = new WebSocket('ws://127.0.0.1:' + port + '/ws');
-
                 ws.onopen = function() {
                     console.log('[AI Code Agent] WebSocket 已连接');
                     wsRetryDelay = 1000;
-                    if (wsReconnectTimer) {
-                        clearTimeout(wsReconnectTimer);
-                        wsReconnectTimer = null;
-                    }
+                    if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
                 };
-
                 ws.onmessage = function(event) {
-                    try {
-                        var data = JSON.parse(event.data);
-                        handleWSMessage(data);
-                    } catch (_) {}
+                    try { handleWSMessage(JSON.parse(event.data)); } catch (_) {}
                 };
-
                 ws.onclose = function() {
                     ws = null;
                     if (extensionEnabled) {
@@ -499,7 +519,6 @@
                         wsRetryDelay = Math.min(wsRetryDelay * 2, WS_MAX_RETRY_DELAY);
                     }
                 };
-
                 ws.onerror = function() {
                     ws = null;
                     if (extensionEnabled) {
@@ -564,10 +583,7 @@
                 );
                 break;
             case 'progress':
-                showNotification(
-                    '⏳ 处理中 [' + data.current + '/' + data.total + ']: ' + data.file,
-                    true
-                );
+                showNotification('⏳ 处理中 [' + data.current + '/' + data.total + ']: ' + data.file, true);
                 break;
             case 'done':
                 showNotification('📋 ' + data.summary, true);
@@ -577,8 +593,6 @@
                 break;
         }
     }
-
-    // ======================== AI 输入框注入 ========================
 
     function injectToAIInput(text) {
         var selectors = [
@@ -601,14 +615,12 @@
         }
         if (target.tagName === 'TEXTAREA') {
             var currentVal = target.value;
-            var newVal = currentVal ? currentVal + '\n\n' + text : text;
-            target.value = newVal;
+            target.value = currentVal ? currentVal + '\n\n' + text : text;
             target.dispatchEvent(new Event('input', { bubbles: true }));
             target.dispatchEvent(new Event('change', { bubbles: true }));
         } else {
             var currentContent = target.innerText || '';
-            var newContent = currentContent ? currentContent + '\n\n' + text : text;
-            target.innerText = newContent;
+            target.innerText = currentContent ? currentContent + '\n\n' + text : text;
             target.dispatchEvent(new InputEvent('input', { bubbles: true }));
         }
         target.focus();
