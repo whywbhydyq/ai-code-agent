@@ -215,11 +215,24 @@ public history: HistoryManager;
     }
 
     private processWSFrame(client: WSClient, opcode: number, payload: Buffer) {
+        // 0x8 close
         if (opcode === 0x8) { client.socket.destroy(); this.wsClients.delete(client.id); return; }
-        if (opcode === 0x9) { this.sendRawFrame(client.socket, Buffer.alloc(0), 0xA); return; }
+        // 0x9 ping → 回复 pong，将 ping payload 原样带回
+        if (opcode === 0x9) { this.sendRawFrame(client.socket, payload, 0xA); return; }
+        // 0xA pong
         if (opcode === 0xA) { client.alive = true; return; }
-
-        const text = payload.toString('utf8');
+        // 0x0 continuation frame：追加到片段缓冲
+        if (opcode === 0x0) {
+            client.fragmentBuffer = Buffer.concat([client.fragmentBuffer, payload]);
+            return;
+        }
+        // 0x1 text frame：若存在未完成的片段则合并
+        let fullPayload = payload;
+        if (client.fragmentBuffer.length > 0) {
+            fullPayload = Buffer.concat([client.fragmentBuffer, payload]);
+            client.fragmentBuffer = Buffer.alloc(0);
+        }
+        const text = fullPayload.toString('utf8');
         let parsed: any;
         try { parsed = JSON.parse(text); } catch {
             this.log.appendLine(`[WS] 无法解析: ${text.slice(0, 100)}`);
