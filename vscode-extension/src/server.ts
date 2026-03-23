@@ -1,8 +1,11 @@
 /**
  * AI Code Agent - 服务器
- * 优化：自动寻找可用端口（解决多窗口冲突）
+ * 优化：
+ * - 自动寻找可用端口（解决多窗口冲突）
+ * - [新增] WebSocket continuation frame 支持
+ * - [新增] HTTP body 用 Buffer 数组拼接
+ * - [新增] getClientCount() 供状态栏调用
  */
-
 import * as http from 'http';
 import * as vscode from 'vscode';
 import { parseActionsFromText, AgentAction } from './codeApplier';
@@ -16,30 +19,35 @@ const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const MAX_PORT_TRIES = 10;
 
 interface WSClient {
-  socket: import('net').Socket;
-  id: string;
-  alive: boolean;
-  buffer: Buffer;
-  fragmentBuffer: Buffer;
+    socket: import('net').Socket;
+    id: string;
+    alive: boolean;
+    buffer: Buffer;
+    fragmentBuffer: Buffer;
 }
+
 export class AgentServer {
     private httpServer: http.Server | null = null;
     private wsClients: Map<string, WSClient> = new Map();
     private basePort: number;
     private actualPort: number = 0;
     private log: vscode.OutputChannel;
-public history: HistoryManager;
-  private pingInterval: NodeJS.Timeout | null = null;
-  public onClientCountChange: ((count: number) => void) | null = null;
+    public history: HistoryManager;
+    private pingInterval: NodeJS.Timeout | null = null;
+
     constructor(port: number, log: vscode.OutputChannel) {
         this.basePort = port;
         this.log = log;
         this.history = new HistoryManager();
     }
 
+    // [新增] 返回当前 WebSocket 连接数，供状态栏显示
+    getClientCount(): number {
+        return this.wsClients.size;
+    }
+
     /**
      * 启动服务器，返回实际使用的端口号
-     * 如果 basePort 被占用，自动尝试 +1, +2, ... 直到 +MAX_PORT_TRIES
      */
     async start(): Promise<number> {
         for (let offset = 0; offset < MAX_PORT_TRIES; offset++) {
@@ -84,11 +92,6 @@ public history: HistoryManager;
                 resolve();
             });
         });
-    }
-
-    /** 返回当前 WebSocket 连接数，供状态栏显示 */
-    getClientCount(): number {
-        return this.wsClients.size;
     }
 
     stop() {
@@ -162,7 +165,7 @@ public history: HistoryManager;
     }
 
     // ======================================================================
-    // WebSocket 帧缓冲
+    // WebSocket 数据处理
     // ======================================================================
 
     private handleWSData(client: WSClient, data: Buffer) {
@@ -172,7 +175,7 @@ public history: HistoryManager;
             const result = this.tryDecodeWSFrame(client.buffer);
             if (!result) break;
             client.buffer = client.buffer.slice(result.totalLength);
-            this.processWSFrame(client, result.opcode, result.payload);
+            this.processWSFrame(client, result.opcode, result.payload, result.fin);
         }
 
         if (client.buffer.length > MAX_BODY_SIZE) {
@@ -184,8 +187,10 @@ public history: HistoryManager;
 
     private tryDecodeWSFrame(
         data: Buffer
-    ): { opcode: number; payload: Buffer; totalLength: number } | null {
+    ): { opcode: number; payload: Buffer; totalLength: number; fin: boolean } | null {
         if (data.length < 2) return null;
+
+        const fin = (data[0] & 0x80) !== 0;
         const opcode = data[0] & 0x0f;
         const masked = (data[1] & 0x80) !== 0;
         let payloadLen = data[1] & 0x7f;
@@ -216,28 +221,34 @@ public history: HistoryManager;
         } else {
             payload = data.slice(offset, offset + payloadLen);
         }
-        return { opcode, payload, totalLength };
+
+        return { opcode, payload, totalLength, fin };
     }
 
-    private processWSFrame(client: WSClient, opcode: number, payload: Buffer) {
+    // [优化] 支持 continuation frame，正确处理大消息分帧
+    private processWSFrame(client: WSClient, opcode: number, payload: Buffer, fin: boolean) {
         // 0x8 close
         if (opcode === 0x8) { client.socket.destroy(); this.wsClients.delete(client.id); return; }
-        // 0x9 ping → 回复 pong，将 ping payload 原样带回
+        // 0x9 ping → pong
         if (opcode === 0x9) { this.sendRawFrame(client.socket, payload, 0xA); return; }
         // 0xA pong
         if (opcode === 0xA) { client.alive = true; return; }
+
         // 0x0 continuation frame：追加到片段缓冲
         if (opcode === 0x0) {
             client.fragmentBuffer = Buffer.concat([client.fragmentBuffer, payload]);
+            if (!fin) return;
+            // FIN=1 的 continuation 代表分帧消息结束
+            payload = client.fragmentBuffer;
+            client.fragmentBuffer = Buffer.alloc(0);
+        } else if (!fin) {
+            // 非 continuation 的非 FIN 帧：开始新的分帧消息
+            client.fragmentBuffer = payload;
             return;
         }
-        // 0x1 text frame：若存在未完成的片段则合并
-        let fullPayload = payload;
-        if (client.fragmentBuffer.length > 0) {
-            fullPayload = Buffer.concat([client.fragmentBuffer, payload]);
-            client.fragmentBuffer = Buffer.alloc(0);
-        }
-        const text = fullPayload.toString('utf8');
+
+        // 完整的 text frame
+        const text = payload.toString('utf8');
         let parsed: any;
         try { parsed = JSON.parse(text); } catch {
             this.log.appendLine(`[WS] 无法解析: ${text.slice(0, 100)}`);
@@ -247,7 +258,7 @@ public history: HistoryManager;
     }
 
     // ======================================================================
-    // WebSocket 命令
+    // WebSocket 命令处理
     // ======================================================================
 
     private async handleWSCommand(client: WSClient, cmd: any) {
@@ -332,7 +343,7 @@ public history: HistoryManager;
     }
 
     // ======================================================================
-    // 发送工具
+    // WebSocket 发送与广播
     // ======================================================================
 
     broadcast(data: any) {
@@ -349,6 +360,7 @@ public history: HistoryManager;
     private sendRawFrame(socket: import('net').Socket, payload: Buffer, opcode: number) {
         const len = payload.length;
         let header: Buffer;
+
         if (len < 126) {
             header = Buffer.alloc(2);
             header[0] = 0x80 | opcode;
@@ -364,6 +376,7 @@ public history: HistoryManager;
             header[1] = 127;
             header.writeBigUInt64BE(BigInt(len), 2);
         }
+
         try { socket.write(Buffer.concat([header, payload])); } catch (_) {}
     }
 
@@ -376,7 +389,7 @@ public history: HistoryManager;
     }
 
     // ======================================================================
-    // HTTP
+    // HTTP 处理
     // ======================================================================
 
     private handleHttp(req: http.IncomingMessage, res: http.ServerResponse) {
@@ -402,22 +415,24 @@ public history: HistoryManager;
             return;
         }
 
-if (req.method === 'POST') {
-      const chunks: Buffer[] = [];
-      let bodySize = 0;
-      req.on('data', (chunk: Buffer) => {
-        bodySize += chunk.length;
-        if (bodySize > MAX_BODY_SIZE) {
-          json({ status: 'error', message: '请求体过大' }, 413);
-          req.destroy();
-          return;
-        }
-        chunks.push(chunk);
-      });
-      req.on('end', async () => {
-        try {
-          const body = Buffer.concat(chunks).toString('utf-8');
-          const data = JSON.parse(body || '{}');                    await this.routePost(req.url || '', data, json);
+        if (req.method === 'POST') {
+            // [优化] 用 Buffer 数组拼接，避免字符串 += 的内存碎片
+            const chunks: Buffer[] = [];
+            let bodySize = 0;
+            req.on('data', (chunk: Buffer) => {
+                bodySize += chunk.length;
+                if (bodySize > MAX_BODY_SIZE) {
+                    json({ status: 'error', message: '请求体过大' }, 413);
+                    req.destroy();
+                    return;
+                }
+                chunks.push(chunk);
+            });
+            req.on('end', async () => {
+                try {
+                    const body = Buffer.concat(chunks).toString('utf-8');
+                    const data = JSON.parse(body || '{}');
+                    await this.routePost(req.url || '', data, json);
                 } catch (err: any) {
                     json({ status: 'error', message: err.message }, 400);
                 }
@@ -476,7 +491,6 @@ if (req.method === 'POST') {
                 json({ success: true, message: '历史已清空' });
                 return;
             case '/focus':
-                // 把 VS Code 窗口切到前台
                 vscode.commands.executeCommand('workbench.action.focusWindow');
                 json({ success: true });
                 return;
@@ -486,7 +500,7 @@ if (req.method === 'POST') {
     }
 
     // ======================================================================
-    // 操作处理
+    // 批量处理
     // ======================================================================
 
     private async processActionsAsync(actions: AgentAction[], client: WSClient | null) {
@@ -526,8 +540,8 @@ if (req.method === 'POST') {
         const skippedCount = results.length - acceptedFiles.length - failedFiles.length;
 
         let summary = `处理完成：✅${acceptedFiles.length} 接受`;
-        if (skippedCount > 0) summary += ` ⏭️${skippedCount} 跳过`;
-        if (failedFiles.length > 0) summary += ` ❌${failedFiles.length} 失败`;
+        if (skippedCount > 0) summary += `  ⏭${skippedCount} 跳过`;
+        if (failedFiles.length > 0) summary += `  ❌${failedFiles.length} 失败`;
         if (acceptedFiles.length > 0 && acceptedFiles.length <= 5) summary += '\n✅ ' + acceptedFiles.join(', ');
         if (failedFiles.length > 0 && failedFiles.length <= 3) summary += '\n❌ ' + failedFiles.join(', ');
 
