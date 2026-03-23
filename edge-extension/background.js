@@ -1,22 +1,31 @@
 var DEFAULT_PORT = 9960;
 var MAX_PORT_SCAN = 10;
+var cachedServerUrl = null;
+var cacheExpiry = 0;
 
 // 自动探测可用端口（从配置端口开始扫描）
 async function findServerUrl() {
-    return new Promise(function(resolve) {
-        chrome.storage.local.get(['serverPort'], async function(r) {
-            var basePort = r.serverPort || DEFAULT_PORT;
+ if (cachedServerUrl && Date.now() < cacheExpiry) {
+  try {
+   var resp = await fetch(cachedServerUrl + '/status', { signal: AbortSignal.timeout(300) });
+   if (resp.ok) return cachedServerUrl;
+  } catch (_) {}
+  cachedServerUrl = null;
+ }
+ return new Promise(function(resolve) {
+  chrome.storage.local.get(['serverPort'], async function(r) {            var basePort = r.serverPort || DEFAULT_PORT;
 
             for (var i = 0; i < MAX_PORT_SCAN; i++) {
                 var port = basePort + i;
                 var url = 'http://127.0.0.1:' + port;
                 try {
                     var resp = await fetch(url + '/status', { signal: AbortSignal.timeout(500) });
-                    if (resp.ok) {
-                        resolve(url);
-                        return;
-                    }
-                } catch (_) {}
+if (resp.ok) {
+       cachedServerUrl = url;
+       cacheExpiry = Date.now() + 30000;
+       resolve(url);
+       return;
+      }                } catch (_) {}
             }
             // 都找不到，返回默认
             resolve('http://127.0.0.1:' + basePort);
