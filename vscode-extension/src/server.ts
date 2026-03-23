@@ -384,22 +384,22 @@ public history: HistoryManager;
             return;
         }
 
-        if (req.method === 'POST') {
-            let body = '';
-            let bodySize = 0;
-            req.on('data', (chunk: Buffer) => {
-                bodySize += chunk.length;
-                if (bodySize > MAX_BODY_SIZE) {
-                    json({ status: 'error', message: '请求体过大' }, 413);
-                    req.destroy();
-                    return;
-                }
-                body += chunk.toString();
-            });
-            req.on('end', async () => {
-                try {
-                    const data = JSON.parse(body || '{}');
-                    await this.routePost(req.url || '', data, json);
+if (req.method === 'POST') {
+      const chunks: Buffer[] = [];
+      let bodySize = 0;
+      req.on('data', (chunk: Buffer) => {
+        bodySize += chunk.length;
+        if (bodySize > MAX_BODY_SIZE) {
+          json({ status: 'error', message: '请求体过大' }, 413);
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on('end', async () => {
+        try {
+          const body = Buffer.concat(chunks).toString('utf-8');
+          const data = JSON.parse(body || '{}');                    await this.routePost(req.url || '', data, json);
                 } catch (err: any) {
                     json({ status: 'error', message: err.message }, 400);
                 }
