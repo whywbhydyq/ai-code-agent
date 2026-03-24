@@ -139,47 +139,31 @@
         return false;
     }
 
-    // [重写] 只过滤真正的标签/工具栏元素，不再按文本长度过滤代码块
     function isCodeBlockHeader(el) {
         var tag = el.tagName;
-
-        // 这些标签肯定不是代码块
         if (tag === 'SPAN' || tag === 'BUTTON' || tag === 'SMALL' || tag === 'LABEL') return true;
-
-        // 检查 class 名是否是工具栏/标签类
         var cls = (el.className || '').toLowerCase();
         if (/header|title|label|badge|toolbar|copy-btn|copy-code/.test(cls)) return true;
-
-        // <pre> 元素几乎总是代码块，不过滤
         if (tag === 'PRE') return false;
-
-        // <code> 在 <pre> 内部 = 代码内容，不过滤
         if (tag === 'CODE' && el.closest && el.closest('pre')) return false;
-
-        // 独立的 <code>（行内代码），如果是语言标签类的 class 则过滤
         if (tag === 'CODE') {
             if (/^lang|^language/.test(cls)) return true;
-            // 独立 code 元素，如果只有一个词且很短，可能是行内代码标签
             var text = (el.textContent || '').trim();
             if (text.length < 10 && text.indexOf('\n') === -1) return true;
         }
-
         return false;
     }
 
-    function hasProcessedAncestor(el) {
-        var parent = el.parentElement;
-        var depth = 0;
-        while (parent && depth < 10) {
-            if (parent.getAttribute(PROCESSED_ATTR)) return true;
-            if (parent.querySelector && parent.querySelector(':scope > .aca-button-wrapper')) return true;
-            parent = parent.parentElement;
-            depth++;
-        }
+    // [修复] 只检查直接父元素是否已有按钮，不再向上遍历整个DOM树
+    // 这样同一个AI回复中的多个代码块都能独立显示按钮
+    function hasDirectButtonWrapper(el) {
+        var container = el.closest('pre') || el;
+        // 检查这个代码块紧邻的下一个兄弟是否已经是按钮
+        var next = container.nextElementSibling;
+        if (next && next.classList && next.classList.contains('aca-button-wrapper')) return true;
         return false;
     }
 
-    // ======================== 跳转到 VS Code ========================
     function jumpToVSCode() {
         if (!autoJumpEnabled) return;
         chrome.storage.local.get(['serverPort'], function(r) {
@@ -192,7 +176,6 @@
         });
     }
 
-    // ======================== 发送到 VS Code（带超时） ========================
     function sendToVSCode(payload, callback) {
         var responded = false;
         var timeoutId = setTimeout(function() {
@@ -217,17 +200,12 @@
         );
     }
 
-    // ======================== 统一的按钮创建 ========================
-    // [重写] 所有按钮统一放在代码块下方，位置一致
-
     function createButtonWrapper(element, btnText, btnTitle, onClick) {
         var container = element.closest('pre') || element;
-        container.style.position = 'relative';
 
         var wrapper = document.createElement('div');
         wrapper.className = 'aca-button-wrapper';
 
-        // 关闭按钮
         var dismissBtn = document.createElement('button');
         dismissBtn.className = 'aca-dismiss-btn';
         dismissBtn.textContent = '\u00d7';
@@ -239,13 +217,11 @@
             element.setAttribute(PROCESSED_ATTR, 'dismissed');
         });
 
-        // 主按钮
         var btn = document.createElement('button');
         btn.className = BUTTON_CLASS;
         btn.textContent = btnText;
         if (btnTitle) btn.title = btnTitle;
 
-        // 状态文本
         var status = document.createElement('span');
         status.className = 'aca-status';
 
@@ -259,7 +235,6 @@
         wrapper.appendChild(btn);
         wrapper.appendChild(status);
 
-        // 统一放在代码块后面
         if (container.nextSibling) {
             container.parentElement.insertBefore(wrapper, container.nextSibling);
         } else {
@@ -327,7 +302,6 @@
         );
     }
 
-    // ======================== 扫描逻辑 ========================
     var lastScanHash = '';
 
     function getPageCodeHash() {
@@ -350,59 +324,33 @@
         if (hash === lastScanHash) return;
         lastScanHash = hash;
 
-        var processedParents = new Set();
-
+        // [修复] 不再用 processedParents Set，每个 pre/code 独立判断
         var codeEls = document.querySelectorAll('pre, code');
         codeEls.forEach(function(el) {
             if (el.getAttribute(PROCESSED_ATTR)) return;
             if (isCodeBlockHeader(el)) return;
-            if (hasProcessedAncestor(el)) return;
+            if (hasDirectButtonWrapper(el)) return;
 
             var text = el.textContent || '';
             if (text.trim().length < 10) return;
 
+            // 确定目标元素：code在pre内时用pre，否则用自身
             var target;
-            if (el.tagName === 'CODE') {
-                target = el.closest('pre') || el;
+            if (el.tagName === 'CODE' && el.closest('pre')) {
+                target = el.closest('pre');
             } else {
                 target = el;
             }
 
+            // 如果target已处理或已有按钮，跳过
             if (target.getAttribute(PROCESSED_ATTR)) return;
-            if (processedParents.has(target)) return;
-            processedParents.add(target);
+            if (hasDirectButtonWrapper(target)) return;
 
             var actions = extractActions(text);
             if (actions.length > 0) {
                 addApplyButton(target, actions);
             } else if (!looksLikeNonCode(text)) {
                 addManualButton(target);
-            }
-        });
-
-        // 扫描 AI 回复容器中可能遗漏的 agent-action 块
-        document.querySelectorAll(
-            'div[class*="message"], div[class*="response"], div[class*="answer"], article'
-        ).forEach(function(el) {
-            if (el.getAttribute(PROCESSED_ATTR)) return;
-            var text = el.textContent || '';
-            if (!looksLikeAction(text)) return;
-
-            if (el.querySelector('.aca-button-wrapper')) {
-                el.setAttribute(PROCESSED_ATTR, 'scan-parent');
-                return;
-            }
-
-            var actions = extractActions(text);
-            if (actions.length > 0) {
-                var innerCode = el.querySelector('pre, code');
-                if (innerCode && !innerCode.getAttribute(PROCESSED_ATTR)) {
-                    var innerTarget = innerCode.closest('pre') || innerCode;
-                    if (!innerTarget.getAttribute(PROCESSED_ATTR)) {
-                        addApplyButton(innerTarget, actions);
-                    }
-                }
-                el.setAttribute(PROCESSED_ATTR, 'scan-parent');
             }
         });
     }
@@ -623,7 +571,7 @@
         }, 3000);
     }
 
-    console.log('[AI Code Agent] Content script loaded. v1.2.2');
+    console.log('[AI Code Agent] Content script loaded. v1.2.3');
 
     // ======================== WebSocket ========================
     var ws = null;
