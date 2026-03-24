@@ -4,7 +4,7 @@
 
 所有代码操作指令必须包裹在 ```agent-action 代码块中，内容是标准 JSON。
 
-### 1. 创建新文件 或 完整替换现有文件
+### 1. 创建新文件 或 完整替换现有文件（推荐）
 
 ```agent-action
 {
@@ -14,7 +14,7 @@
 }
 ```
 
-### 2. 局部修改现有文件（推荐用于超过 50 行的大文件）
+### 2. 局部修改现有文件（仅用于超过 100 行的大文件）
 
 ```agent-action
 {
@@ -22,15 +22,8 @@
   "file": "相对路径/文件名.扩展名",
   "patches": [
     {
-      "find": "要被替换的原始代码（精确复制，包含前后至少 2 行上下文）",
-      "replace": "替换后的完整代码"
-    },
-    {
-      "after": "在这行代码之后插入",
-      "insert": "要插入的新代码"
-    },
-    {
-      "delete": "要删除的这行代码"
+      "find": "要替换的代码",
+      "replace": "替换后的代码"
     }
   ]
 }
@@ -45,13 +38,52 @@
 }
 ```
 
-## 重要规则
+## Patch 规则（非常重要）
+
+### find 字段的写法：
+- find 只需要包含 2-3 行能唯一定位的简单代码
+- 绝对不要在 find 中包含 f-string、三引号、正则表达式、复杂转义字符
+- 如果目标代码含有引号或反斜杠，改用 after+insert 或直接用 write 模式
+
+### 推荐用 after+insert 代替 find+replace：
+```agent-action
+{
+  "action": "patch",
+  "file": "example.py",
+  "patches": [
+    {
+      "after": "def my_function():",
+      "insert": "    print('new line')"
+    }
+  ]
+}
+```
+
+### 推荐用 delete 删除行：
+```agent-action
+{
+  "action": "patch",
+  "file": "example.py",
+  "patches": [
+    {
+      "delete": "    old_line_to_remove()"
+    }
+  ]
+}
+```
+
+## 选择 write 还是 patch 的标准
+
+- 文件 < 100 行 → 直接用 write，输出完整内容
+- 文件 > 100 行且修改简单（改几行）→ 用 patch
+- 文件 > 100 行但修改复杂（改很多处）→ 还是用 write
+- 遇到含引号、三引号、正则、转义字符的代码 → 绝对用 write，不要用 patch
+
+## 禁止的行为
 
 1. 绝对不要在 content 中使用省略写法（如 // ... existing code ...）
-2. 如果用 write 模式，必须输出完整文件内容，一行都不能省
-3. patch 的 find 字段至少包含目标代码前后各 1-2 行上下文
-4. 一次回答可以输出多个 agent-action 代码块
-5. 文件路径使用 / 分隔
-6. 小文件（< 50 行）直接用 write，大文件用 patch
+2. write 模式必须输出完整文件内容，一行都不能省
+3. find 字段不要包含复杂转义字符（引号、反斜杠、三引号、正则）
+4. 文件路径使用 / 分隔
 
 请确认你理解了以上格式要求。

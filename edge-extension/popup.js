@@ -31,7 +31,7 @@ document.addEventListener('DOMContentLoaded', function() {
     var PROMPT_TEMPLATE = '你好，请在后续对话中，当涉及代码文件的创建、修改或删除时，严格按照以下格式输出。\n\n' +
         '## 格式规范\n\n' +
         '所有代码操作指令必须包裹在 ```agent-action 代码块中，内容是标准 JSON。\n\n' +
-        '### 1. 创建新文件 或 完整替换现有文件\n\n' +
+        '### 1. 创建新文件 或 完整替换现有文件（推荐）\n\n' +
         '```agent-action\n' +
         '{\n' +
         '  "action": "write",\n' +
@@ -39,22 +39,15 @@ document.addEventListener('DOMContentLoaded', function() {
         '  "content": "完整的文件内容..."\n' +
         '}\n' +
         '```\n\n' +
-        '### 2. 局部修改现有文件（推荐用于超过 50 行的大文件）\n\n' +
+        '### 2. 局部修改现有文件（仅用于超过 100 行的大文件）\n\n' +
         '```agent-action\n' +
         '{\n' +
         '  "action": "patch",\n' +
         '  "file": "相对路径/文件名.扩展名",\n' +
         '  "patches": [\n' +
         '    {\n' +
-        '      "find": "要被替换的原始代码（精确复制，包含前后至少 2 行上下文）",\n' +
-        '      "replace": "替换后的完整代码"\n' +
-        '    },\n' +
-        '    {\n' +
-        '      "after": "在这行代码之后插入",\n' +
-        '      "insert": "要插入的新代码"\n' +
-        '    },\n' +
-        '    {\n' +
-        '      "delete": "要删除的这行代码"\n' +
+        '      "find": "要替换的代码（2-3行简单代码，不含引号和转义）",\n' +
+        '      "replace": "替换后的代码"\n' +
         '    }\n' +
         '  ]\n' +
         '}\n' +
@@ -67,12 +60,11 @@ document.addEventListener('DOMContentLoaded', function() {
         '}\n' +
         '```\n\n' +
         '## 重要规则\n\n' +
-        '1. 绝对不要在 content 中使用省略写法\n' +
-        '2. 如果用 write 模式，必须输出完整文件内容，一行都不能省\n' +
-        '3. patch 的 find 字段至少包含目标代码前后各 1-2 行上下文\n' +
-        '4. 一次回答可以输出多个 agent-action 代码块\n' +
-        '5. 文件路径使用 / 分隔\n' +
-        '6. 小文件（< 50 行）直接用 write，大文件用 patch\n\n' +
+        '1. 文件 < 100 行 → 用 write 输出完整内容\n' +
+        '2. find 字段只写 2-3 行简单代码，不含引号、反斜杠、三引号、正则\n' +
+        '3. 遇到复杂转义字符的代码 → 直接用 write 不要用 patch\n' +
+        '4. 绝对不要省略代码（如 // ... existing code ...）\n' +
+        '5. 文件路径使用 / 分隔\n\n' +
         '请确认你理解了以上格式要求。';
 
     // 尝试从外部文件加载提示词
