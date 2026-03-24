@@ -62,7 +62,7 @@
     function tryParseAndPush(str, arr) {
         var attempts = [
             str.trim(),
-            str.trim().replace(/,\s*([\]}])/g, '$1'),
+            str.trim().replace(/,\s*([\]\}])/g, '$1'),
             str.trim().replace(/'/g, '"'),
         ];
         for (var i = 0; i < attempts.length; i++) {
@@ -110,11 +110,11 @@
                 terminalCount++;
                 continue;
             }
-            if (/^\d+[\.)\u3001]\s/.test(line)) {
+            if (/^\d+[\.\)\u3001]\s/.test(line)) {
                 stepCount++;
                 continue;
             }
-            if (/[\u2192\->]/.test(line) && /[\u4e00-\u9fff]/.test(line)) {
+            if (/[\u2192\-\>]/.test(line) && /[\u4e00-\u9fff]/.test(line)) {
                 stepCount++;
                 continue;
             }
@@ -161,31 +161,35 @@
     }
 
     // ======================== 跳转到 VS Code ========================
-    // 修复：使用 background.js 的 findServerUrl 而不是直接猜端口
     function jumpToVSCode() {
         if (!autoJumpEnabled) return;
-        chrome.runtime.sendMessage({ type: 'send-raw-text', text: '__focus__' }, function() {});
-        // 同时直接尝试 focus
         chrome.storage.local.get(['serverPort'], function(r) {
-            var basePort = r.serverPort || 9960;
-            for (var i = 0; i < 5; i++) {
-                (function(port) {
-                    fetch('http://127.0.0.1:' + port + '/focus', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: '{}'
-                    }).catch(function() {});
-                })(basePort + i);
-            }
+            var port = r.serverPort || 9960;
+            fetch('http://127.0.0.1:' + port + '/focus', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            }).catch(function() {});
         });
     }
 
+    // ======================== 发送到 VS Code（带超时） ========================
     function sendToVSCode(payload, callback) {
+        var responded = false;
+        var timeoutId = setTimeout(function() {
+            if (responded) return;
+            responded = true;
+            if (callback) callback({ success: false, message: '请求超时（15秒），请检查VS Code是否打开了正确的项目' });
+        }, 15000);
+
         chrome.runtime.sendMessage(
             payload.actions
                 ? { type: 'send-actions', actions: payload.actions }
                 : { type: 'send-raw-text', text: payload.text },
             function(response) {
+                if (responded) return;
+                responded = true;
+                clearTimeout(timeoutId);
                 if (response && response.success) {
                     jumpToVSCode();
                 }
@@ -301,7 +305,6 @@
     }
 
     // ======================== 扫描逻辑 ========================
-    // 记录上次扫描时页面代码块的内容快照，只有内容变化才真正扫描
     var lastScanHash = '';
 
     function getPageCodeHash() {
@@ -318,7 +321,6 @@
     function scanPage() {
         if (!extensionEnabled || !autoScanEnabled) return;
 
-        // 快速检查：未处理的代码块内容没变化就跳过
         var hash = getPageCodeHash();
         if (hash === lastScanHash) return;
         lastScanHash = hash;
@@ -380,7 +382,6 @@
     }
 
     // ======================== MutationObserver ========================
-    // 只监听 childList（新节点），不监听 characterData（防止内存泄漏）
     var scanTimeout = null;
     var observer = new MutationObserver(function(mutations) {
         if (!extensionEnabled || !autoScanEnabled) return;
@@ -392,7 +393,6 @@
     observer.observe(document.body, { childList: true, subtree: true });
 
     // ======================== 定时轮询兜底 ========================
-    // 每3秒检查一次，捕获 MutationObserver 遗漏的场景（如流式输出结束）
     var pollInterval = null;
     function startPolling() {
         if (pollInterval) return;
