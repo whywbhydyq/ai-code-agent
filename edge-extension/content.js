@@ -16,6 +16,7 @@
         autoJumpEnabled = result.autoJump !== false;
         if (extensionEnabled && autoScanEnabled) {
             setTimeout(scanPage, 1500);
+            startPolling();
         }
         if (extensionEnabled) {
             wsConnect();
@@ -159,15 +160,23 @@
         return false;
     }
 
+    // ======================== 跳转到 VS Code ========================
+    // 修复：使用 background.js 的 findServerUrl 而不是直接猜端口
     function jumpToVSCode() {
         if (!autoJumpEnabled) return;
+        chrome.runtime.sendMessage({ type: 'send-raw-text', text: '__focus__' }, function() {});
+        // 同时直接尝试 focus
         chrome.storage.local.get(['serverPort'], function(r) {
-            var port = r.serverPort || 9960;
-            fetch('http://127.0.0.1:' + port + '/focus', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: '{}'
-            }).catch(function() {});
+            var basePort = r.serverPort || 9960;
+            for (var i = 0; i < 5; i++) {
+                (function(port) {
+                    fetch('http://127.0.0.1:' + port + '/focus', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: '{}'
+                    }).catch(function() {});
+                })(basePort + i);
+            }
         });
     }
 
@@ -291,8 +300,28 @@
         container.appendChild(closeBtn);
     }
 
+    // ======================== 扫描逻辑 ========================
+    // 记录上次扫描时页面代码块的内容快照，只有内容变化才真正扫描
+    var lastScanHash = '';
+
+    function getPageCodeHash() {
+        var els = document.querySelectorAll('pre, code');
+        var total = 0;
+        els.forEach(function(el) {
+            if (!el.getAttribute(PROCESSED_ATTR)) {
+                total += (el.textContent || '').length;
+            }
+        });
+        return els.length + ':' + total;
+    }
+
     function scanPage() {
         if (!extensionEnabled || !autoScanEnabled) return;
+
+        // 快速检查：未处理的代码块内容没变化就跳过
+        var hash = getPageCodeHash();
+        if (hash === lastScanHash) return;
+        lastScanHash = hash;
 
         var processedParents = new Set();
 
@@ -351,16 +380,35 @@
     }
 
     // ======================== MutationObserver ========================
+    // 只监听 childList（新节点），不监听 characterData（防止内存泄漏）
     var scanTimeout = null;
     var observer = new MutationObserver(function(mutations) {
         if (!extensionEnabled || !autoScanEnabled) return;
         var hasNewNodes = mutations.some(function(m) { return m.addedNodes.length > 0; });
         if (!hasNewNodes) return;
         if (scanTimeout) clearTimeout(scanTimeout);
-        scanTimeout = setTimeout(scanPage, 800);
+        scanTimeout = setTimeout(scanPage, 600);
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
+    // ======================== 定时轮询兜底 ========================
+    // 每3秒检查一次，捕获 MutationObserver 遗漏的场景（如流式输出结束）
+    var pollInterval = null;
+    function startPolling() {
+        if (pollInterval) return;
+        pollInterval = setInterval(function() {
+            if (!extensionEnabled || !autoScanEnabled) return;
+            scanPage();
+        }, 3000);
+    }
+    function stopPolling() {
+        if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+        }
+    }
+
+    // ======================== 选中文本浮动按钮 ========================
     var floatingContainer = null;
     var floatingTimeout = null;
 
@@ -464,8 +512,10 @@
         if (floatingContainer && !floatingContainer.contains(e.target)) removeFloatingBtn();
     });
 
+    // ======================== 开关控制 ========================
     function disableExtension() {
         extensionEnabled = false;
+        stopPolling();
         removeFloatingBtn();
         document.querySelectorAll('.aca-button-wrapper').forEach(function(el) { el.remove(); });
         document.querySelectorAll('.aca-manual-btn').forEach(function(el) { el.remove(); });
@@ -475,21 +525,26 @@
         document.querySelectorAll('[' + PROCESSED_ATTR + ']').forEach(function(el) {
             el.removeAttribute(PROCESSED_ATTR);
         });
+        lastScanHash = '';
     }
 
     function enableExtension() {
         extensionEnabled = true;
-        if (autoScanEnabled) scanPage();
+        lastScanHash = '';
+        if (autoScanEnabled) {
+            scanPage();
+            startPolling();
+        }
         if (!ws) wsConnect();
     }
 
     chrome.runtime.onMessage.addListener(function(message) {
-                if (message.type === 'scan-page-only') {
+        if (message.type === 'scan-page-only') {
             if (!extensionEnabled) return;
-            // 只扫描显示按钮，不发送
+            lastScanHash = '';
             autoScanEnabled = true;
             scanPage();
-            showNotification('已扫描页面，按钮已显示在代码块旁', true);
+            showNotification('\u5df2\u626b\u63cf\u9875\u9762\uff0c\u6309\u94ae\u5df2\u663e\u793a\u5728\u4ee3\u7801\u5757\u65c1', true);
             return;
         }
         if (message.type === 'scan-and-send-all') {
@@ -516,7 +571,13 @@
         }
         if (message.type === 'toggle-auto-scan') {
             autoScanEnabled = message.enabled;
-            if (autoScanEnabled && extensionEnabled) scanPage();
+            if (autoScanEnabled && extensionEnabled) {
+                lastScanHash = '';
+                scanPage();
+                startPolling();
+            } else {
+                stopPolling();
+            }
         }
         if (message.type === 'toggle-extension') {
             if (message.enabled) { enableExtension(); } else { disableExtension(); }
@@ -538,7 +599,7 @@
         }, 3000);
     }
 
-    console.log('[AI Code Agent] Content script loaded. v1.2.0');
+    console.log('[AI Code Agent] Content script loaded. v1.2.1');
 
     // ======================== WebSocket ========================
     var ws = null;
