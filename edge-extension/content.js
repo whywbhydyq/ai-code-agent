@@ -97,8 +97,8 @@
         var lines = trimmed.split('\n');
         var nonEmptyLines = lines.filter(function(l) { return l.trim().length > 0; });
 
-        if (nonEmptyLines.length < 3) return true;
-        if (trimmed.length < 80) return true;
+        if (nonEmptyLines.length < 2) return true;
+        if (trimmed.length < 40) return true;
 
         var terminalCount = 0;
         var stepCount = 0;
@@ -125,9 +125,9 @@
             }
         }
 
-        if (terminalCount / nonEmptyLines.length > 0.6) return true;
-        if (stepCount / nonEmptyLines.length > 0.5) return true;
-        if (naturalLangCount / nonEmptyLines.length > 0.5) return true;
+        if (nonEmptyLines.length > 0 && terminalCount / nonEmptyLines.length > 0.6) return true;
+        if (nonEmptyLines.length > 0 && stepCount / nonEmptyLines.length > 0.5) return true;
+        if (nonEmptyLines.length > 0 && naturalLangCount / nonEmptyLines.length > 0.5) return true;
 
         var cmdRegex = /^(cd|ls|dir|mkdir|rm|cp|mv|cat|echo|npm|npx|yarn|pnpm|git|pip|python|node|cargo|go|docker|kubectl|brew|apt|sudo|chmod|chown|curl|wget|code|vsce)\s/i;
         var cmdCount = 0;
@@ -139,23 +139,42 @@
         return false;
     }
 
+    // [重写] 只过滤真正的标签/工具栏元素，不再按文本长度过滤代码块
     function isCodeBlockHeader(el) {
-        var text = (el.textContent || '').trim();
-        if (text.length < 30) return true;
-        if (text.split('\n').filter(function(l) { return l.trim(); }).length <= 1) return true;
-        var cls = (el.className || '').toLowerCase();
-        if (/lang|language|header|title|label|tag|badge|toolbar|copy/.test(cls)) return true;
         var tag = el.tagName;
+
+        // 这些标签肯定不是代码块
         if (tag === 'SPAN' || tag === 'BUTTON' || tag === 'SMALL' || tag === 'LABEL') return true;
+
+        // 检查 class 名是否是工具栏/标签类
+        var cls = (el.className || '').toLowerCase();
+        if (/header|title|label|badge|toolbar|copy-btn|copy-code/.test(cls)) return true;
+
+        // <pre> 元素几乎总是代码块，不过滤
+        if (tag === 'PRE') return false;
+
+        // <code> 在 <pre> 内部 = 代码内容，不过滤
+        if (tag === 'CODE' && el.closest && el.closest('pre')) return false;
+
+        // 独立的 <code>（行内代码），如果是语言标签类的 class 则过滤
+        if (tag === 'CODE') {
+            if (/^lang|^language/.test(cls)) return true;
+            // 独立 code 元素，如果只有一个词且很短，可能是行内代码标签
+            var text = (el.textContent || '').trim();
+            if (text.length < 10 && text.indexOf('\n') === -1) return true;
+        }
+
         return false;
     }
 
     function hasProcessedAncestor(el) {
         var parent = el.parentElement;
-        while (parent) {
+        var depth = 0;
+        while (parent && depth < 10) {
             if (parent.getAttribute(PROCESSED_ATTR)) return true;
-            if (parent.querySelector('.aca-button-wrapper')) return true;
+            if (parent.querySelector && parent.querySelector(':scope > .aca-button-wrapper')) return true;
             parent = parent.parentElement;
+            depth++;
         }
         return false;
     }
@@ -198,20 +217,21 @@
         );
     }
 
-    function addApplyButton(element, actions) {
-        if (element.getAttribute(PROCESSED_ATTR)) return;
-        element.setAttribute(PROCESSED_ATTR, 'true');
+    // ======================== 统一的按钮创建 ========================
+    // [重写] 所有按钮统一放在代码块下方，位置一致
 
+    function createButtonWrapper(element, btnText, btnTitle, onClick) {
         var container = element.closest('pre') || element;
         container.style.position = 'relative';
 
         var wrapper = document.createElement('div');
         wrapper.className = 'aca-button-wrapper';
 
+        // 关闭按钮
         var dismissBtn = document.createElement('button');
         dismissBtn.className = 'aca-dismiss-btn';
         dismissBtn.textContent = '\u00d7';
-        dismissBtn.title = '\u9690\u85cf\u6b64\u6309\u94ae';
+        dismissBtn.title = '\u9690\u85cf';
         dismissBtn.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
@@ -219,89 +239,92 @@
             element.setAttribute(PROCESSED_ATTR, 'dismissed');
         });
 
+        // 主按钮
         var btn = document.createElement('button');
         btn.className = BUTTON_CLASS;
-        btn.textContent = '\u26a1 \u5e94\u7528\u5230 VS Code (' + actions.length + ' \u4e2a\u6587\u4ef6)';
-        btn.title = actions.map(function(a) { return a.action + ': ' + a.file; }).join('\n');
+        btn.textContent = btnText;
+        if (btnTitle) btn.title = btnTitle;
 
+        // 状态文本
         var status = document.createElement('span');
         status.className = 'aca-status';
 
         btn.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
-            btn.disabled = true;
-            btn.textContent = '\u23f3 \u53d1\u9001\u4e2d...';
-            sendToVSCode({ actions: actions }, function(response) {
-                if (response && response.success) {
-                    btn.textContent = '\u2705 \u5df2\u53d1\u9001\u5230 VS Code';
-                    btn.classList.add('aca-success');
-                    status.textContent = response.message || '';
-                } else {
-                    btn.textContent = '\u274c \u53d1\u9001\u5931\u8d25\uff08\u70b9\u51fb\u91cd\u8bd5\uff09';
-                    btn.classList.add('aca-error');
-                    btn.disabled = false;
-                    status.textContent = response ? response.message : '\u65e0\u6cd5\u8fde\u63a5 VS Code';
-                }
-            });
+            onClick(btn, status);
         });
 
         wrapper.appendChild(dismissBtn);
         wrapper.appendChild(btn);
         wrapper.appendChild(status);
 
+        // 统一放在代码块后面
         if (container.nextSibling) {
             container.parentElement.insertBefore(wrapper, container.nextSibling);
         } else {
             container.parentElement.appendChild(wrapper);
         }
+
+        return wrapper;
+    }
+
+    function addApplyButton(element, actions) {
+        if (element.getAttribute(PROCESSED_ATTR)) return;
+        element.setAttribute(PROCESSED_ATTR, 'true');
+
+        var fileList = actions.map(function(a) { return a.action + ': ' + a.file; }).join('\n');
+
+        createButtonWrapper(
+            element,
+            '\u26a1 \u5e94\u7528\u5230 VS Code (' + actions.length + ' \u4e2a\u6587\u4ef6)',
+            fileList,
+            function(btn, status) {
+                btn.disabled = true;
+                btn.textContent = '\u23f3 \u53d1\u9001\u4e2d...';
+                sendToVSCode({ actions: actions }, function(response) {
+                    if (response && response.success) {
+                        btn.textContent = '\u2705 \u5df2\u53d1\u9001\u5230 VS Code';
+                        btn.classList.add('aca-success');
+                        status.textContent = response.message || '';
+                    } else {
+                        btn.textContent = '\u274c \u53d1\u9001\u5931\u8d25\uff08\u70b9\u51fb\u91cd\u8bd5\uff09';
+                        btn.classList.add('aca-error');
+                        btn.disabled = false;
+                        status.textContent = response ? response.message : '\u65e0\u6cd5\u8fde\u63a5 VS Code';
+                    }
+                });
+            }
+        );
     }
 
     function addManualButton(element) {
         if (element.getAttribute(PROCESSED_ATTR)) return;
         element.setAttribute(PROCESSED_ATTR, 'true');
 
-        var container = element.closest('pre') || element;
-        container.style.position = 'relative';
-
-        var btn = document.createElement('button');
-        btn.className = BUTTON_CLASS + ' aca-manual-btn';
-        btn.textContent = '\ud83d\udce4 VS Code';
-        btn.style.cssText = 'position:absolute;top:5px;right:28px;z-index:100;';
-
-        btn.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            var code = element.textContent || '';
-            if (!code.trim()) return;
-            btn.disabled = true;
-            btn.textContent = '\u23f3 ...';
-            sendToVSCode({ text: code }, function(response) {
-                if (response && response.success) {
-                    btn.textContent = '\u2705 \u5df2\u53d1\u9001';
-                    btn.classList.add('aca-success');
-                } else {
-                    btn.textContent = '\u274c \u91cd\u8bd5';
-                    btn.classList.add('aca-error');
-                    btn.disabled = false;
-                }
-            });
-        });
-
-        var closeBtn = document.createElement('button');
-        closeBtn.className = 'aca-manual-close-btn';
-        closeBtn.textContent = '\u00d7';
-        closeBtn.title = '\u9690\u85cf';
-        closeBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            btn.remove();
-            closeBtn.remove();
-            element.setAttribute(PROCESSED_ATTR, 'dismissed');
-        });
-
-        container.appendChild(btn);
-        container.appendChild(closeBtn);
+        createButtonWrapper(
+            element,
+            '\ud83d\udce4 \u53d1\u9001\u5230 VS Code',
+            '\u53d1\u9001\u6b64\u4ee3\u7801\u5757\u5230 VS Code',
+            function(btn, status) {
+                var code = element.textContent || '';
+                if (!code.trim()) return;
+                btn.disabled = true;
+                btn.textContent = '\u23f3 \u53d1\u9001\u4e2d...';
+                sendToVSCode({ text: code }, function(response) {
+                    if (response && response.success) {
+                        btn.textContent = '\u2705 \u5df2\u53d1\u9001';
+                        btn.classList.add('aca-success');
+                        status.textContent = response.message || '';
+                    } else {
+                        btn.textContent = '\u274c \u53d1\u9001\u5931\u8d25\uff08\u70b9\u51fb\u91cd\u8bd5\uff09';
+                        btn.classList.add('aca-error');
+                        btn.disabled = false;
+                        status.textContent = response ? response.message : '\u65e0\u6cd5\u8fde\u63a5 VS Code';
+                    }
+                });
+            }
+        );
     }
 
     // ======================== 扫描逻辑 ========================
@@ -310,12 +333,14 @@
     function getPageCodeHash() {
         var els = document.querySelectorAll('pre, code');
         var total = 0;
+        var unprocessed = 0;
         els.forEach(function(el) {
             if (!el.getAttribute(PROCESSED_ATTR)) {
                 total += (el.textContent || '').length;
+                unprocessed++;
             }
         });
-        return els.length + ':' + total;
+        return els.length + ':' + unprocessed + ':' + total;
     }
 
     function scanPage() {
@@ -355,6 +380,7 @@
             }
         });
 
+        // 扫描 AI 回复容器中可能遗漏的 agent-action 块
         document.querySelectorAll(
             'div[class*="message"], div[class*="response"], div[class*="answer"], article'
         ).forEach(function(el) {
@@ -518,8 +544,6 @@
         stopPolling();
         removeFloatingBtn();
         document.querySelectorAll('.aca-button-wrapper').forEach(function(el) { el.remove(); });
-        document.querySelectorAll('.aca-manual-btn').forEach(function(el) { el.remove(); });
-        document.querySelectorAll('.aca-manual-close-btn').forEach(function(el) { el.remove(); });
         document.querySelectorAll('.aca-floating-container').forEach(function(el) { el.remove(); });
         document.querySelectorAll('.aca-notification').forEach(function(el) { el.remove(); });
         document.querySelectorAll('[' + PROCESSED_ATTR + ']').forEach(function(el) {
@@ -599,7 +623,7 @@
         }, 3000);
     }
 
-    console.log('[AI Code Agent] Content script loaded. v1.2.1');
+    console.log('[AI Code Agent] Content script loaded. v1.2.2');
 
     // ======================== WebSocket ========================
     var ws = null;
