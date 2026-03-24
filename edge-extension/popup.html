@@ -149,8 +149,6 @@
         }
         .result-success { background: #1a3a1a; color: #a6e3a1; border: 1px solid #2e7d32; display: block; }
         .result-error   { background: #3a1a1a; color: #f38ba8; border: 1px solid #d32f2f; display: block; }
-
-        /* 提示词卡片 */
         .prompt-card {
             background: linear-gradient(135deg, #1a3a2a, #16213e);
             border: 1px solid #2e7d32;
@@ -175,13 +173,12 @@
     </style>
 </head>
 <body>
-    <h1>⚡ AI Code Agent</h1>
+    <h1>\u26a1 AI Code Agent</h1>
 
-    <!-- 插件总开关 -->
     <div class="master-toggle" id="master-toggle-card">
         <div>
-            <div class="master-label">🔌 插件总开关</div>
-            <div class="master-hint" id="master-hint">插件已启用，正在监控页面</div>
+            <div class="master-label">\ud83d\udd0c \u63d2\u4ef6\u603b\u5f00\u5173</div>
+            <div class="master-hint" id="master-hint">\u63d2\u4ef6\u5df2\u542f\u7528\uff0c\u6b63\u5728\u76d1\u63a7\u9875\u9762</div>
         </div>
         <label class="toggle-switch">
             <input type="checkbox" id="extension-enabled-toggle" checked />
@@ -191,30 +188,27 @@
 
     <div id="main-content">
 
-        <!-- 🟢 新增：一键复制提示词 -->
         <div class="prompt-card">
-            <div class="section-title">🚀 快速开始</div>
-            <p>第一次和 AI 对话时，先发送这段提示词，AI 就会按照插件能识别的格式回复代码。</p>
-            <button class="btn-copy-prompt" id="btn-copy-prompt">📋 一键复制 AI 提示词</button>
+            <div class="section-title">\ud83d\ude80 \u5feb\u901f\u5f00\u59cb</div>
+            <p>\u7b2c\u4e00\u6b21\u548c AI \u5bf9\u8bdd\u65f6\uff0c\u5148\u53d1\u9001\u8fd9\u6bb5\u63d0\u793a\u8bcd\uff0cAI \u5c31\u4f1a\u6309\u7167\u63d2\u4ef6\u80fd\u8bc6\u522b\u7684\u683c\u5f0f\u56de\u590d\u4ee3\u7801\u3002</p>
+            <button class="btn-copy-prompt" id="btn-copy-prompt">\ud83d\udccb \u4e00\u952e\u590d\u5236 AI \u63d0\u793a\u8bcd</button>
         </div>
 
-        <!-- 连接状态 -->
         <div class="status-card">
             <div class="status-left">
                 <div class="status-row">
                     <span id="status-dot" class="dot dot-red"></span>
-                    <span id="status-label">检查连接中...</span>
+                    <span id="status-label">\u68c0\u67e5\u8fde\u63a5\u4e2d...</span>
                 </div>
                 <div id="workspace-info" class="workspace-path"></div>
             </div>
-            <button class="btn-small" id="refresh-btn" style="height:32px">🔄 刷新</button>
+            <button class="btn-small" id="refresh-btn" style="height:32px">\ud83d\udd04 \u5237\u65b0</button>
         </div>
 
-        <!-- 自动跳转 -->
         <div class="toggle-row">
             <div>
-                <div class="toggle-label">🚀 点击后自动跳转到 VS Code</div>
-                <div class="toggle-hint">发送代码后自动切换窗口到 VS Code</div>
+                <div class="toggle-label">\ud83d\ude80 \u70b9\u51fb\u540e\u81ea\u52a8\u8df3\u8f6c\u5230 VS Code</div>
+                <div class="toggle-hint">\u53d1\u9001\u4ee3\u7801\u540e\u81ea\u52a8\u5207\u6362\u7a97\u53e3\u5230 VS Code</div>
             </div>
             <label class="toggle-switch">
                 <input type="checkbox" id="auto-jump-toggle" checked />
@@ -222,11 +216,10 @@
             </label>
         </div>
 
-        <!-- 自动检测 -->
         <div class="toggle-row">
             <div>
-                <div class="toggle-label">🔍 自动检测页面代码块</div>
-                <div class="toggle-hint">在 AI 回答旁自动显示「应用」按钮</div>
+                <div class="toggle-label">\ud83d\udd0d \u81ea\u52a8\u68c0\u6d4b\u9875\u9762\u4ee3\u7801\u5757</div>
+                <div class="toggle-hint">\u5728 AI \u56de\u7b54\u65c1\u81ea\u52a8\u663e\u793a\u300c\u5e94\u7528\u300d\u6309\u94ae</div>
             </div>
             <label class="toggle-switch">
                 <input type="checkbox" id="auto-scan-toggle" checked />
@@ -234,40 +227,38 @@
             </label>
         </div>
 
-        <!-- 快捷操作 -->
-        <div class="section-title">快捷操作</div>
+        <div class="section-title">\u5feb\u6377\u64cd\u4f5c</div>
         <div class="action-grid">
-            <button class="action-btn" id="btn-scan">🔍 立即扫描当前页面</button>
-            <button class="action-btn" id="btn-restart">🔄 重启 VS Code 服务器</button>
-            <button class="action-btn danger" id="btn-undo">⏪ 撤销上次 AI 修改</button>
-            <button class="action-btn" id="btn-open-log">📜 查看操作日志</button>
-            <button class="action-btn" id="btn-reload-page">🔃 重新加载当前页面</button>
-            <button class="action-btn" id="btn-reload-ext">♻️ 重载浏览器插件</button>
+            <button class="action-btn" id="btn-scan">\ud83d\udd0d \u7acb\u5373\u626b\u63cf\u5f53\u524d\u9875\u9762</button>
+            <button class="action-btn" id="btn-restart">\ud83d\udd04 \u91cd\u542f VS Code \u670d\u52a1\u5668</button>
+            <button class="action-btn danger" id="btn-undo">\u23ea \u64a4\u9500\u4e0a\u6b21 AI \u4fee\u6539</button>
+            <button class="action-btn" id="btn-open-log">\ud83d\udcdc \u67e5\u770b\u64cd\u4f5c\u65e5\u5fd7</button>
+            <button class="action-btn" id="btn-reload-page">\ud83d\udd03 \u91cd\u65b0\u52a0\u8f7d\u5f53\u524d\u9875\u9762</button>
+            <button class="action-btn" id="btn-reload-ext">\u267b\ufe0f \u91cd\u8f7d\u6d4f\u89c8\u5668\u63d2\u4ef6</button>
+            <button class="action-btn" id="btn-copy-reply">\ud83d\udccb \u590d\u5236\u6700\u8fd1AI\u56de\u590d</button>
+            <button class="action-btn" id="btn-debug-info">\ud83d\udd0d \u6536\u96c6\u8c03\u8bd5\u4fe1\u606f</button>
         </div>
 
-        <!-- 项目路径 -->
         <div class="path-section">
-            <div class="section-title">📁 项目路径管理</div>
+            <div class="section-title">\ud83d\udcc1 \u9879\u76ee\u8def\u5f84\u7ba1\u7406</div>
             <div class="path-input-row">
-                <input type="text" id="path-input" placeholder="D:\\桌面\\my-project 或 /home/user/project" />
-                <button class="btn-small" id="add-path-btn">添加</button>
+                <input type="text" id="path-input" placeholder="D:\\\u684c\u9762\\my-project \u6216 /home/user/project" />
+                <button class="btn-small" id="add-path-btn">\u6dfb\u52a0</button>
             </div>
             <div id="project-list" class="project-list"></div>
-            <div style="font-size:11px;color:#6c7086;margin-top:6px;">蓝色高亮 = VS Code 当前打开的工作区</div>
+            <div style="font-size:11px;color:#6c7086;margin-top:6px;">\u84dd\u8272\u9ad8\u4eae = VS Code \u5f53\u524d\u6253\u5f00\u7684\u5de5\u4f5c\u533a</div>
         </div>
 
-        <!-- 端口 -->
         <div class="port-section">
-            <label>服务器端口：</label>
+            <label>\u670d\u52a1\u5668\u7aef\u53e3\uff1a</label>
             <input type="number" id="port-input" value="9960" min="1024" max="65535" />
-            <button class="btn-small" id="save-port-btn">保存</button>
+            <button class="btn-small" id="save-port-btn">\u4fdd\u5b58</button>
         </div>
 
-        <!-- 手动粘贴 -->
         <div class="manual-section">
-            <div class="section-title">手动粘贴 AI 回复</div>
-            <textarea id="manual-text" placeholder="粘贴包含 agent-action 代码块的 AI 回复文本..."></textarea>
-            <button class="btn-primary" id="manual-send-btn">📤 发送到 VS Code</button>
+            <div class="section-title">\u624b\u52a8\u7c98\u8d34 AI \u56de\u590d</div>
+            <textarea id="manual-text" placeholder="\u7c98\u8d34\u5305\u542b agent-action \u4ee3\u7801\u5757\u7684 AI \u56de\u590d\u6587\u672c..."></textarea>
+            <button class="btn-primary" id="manual-send-btn">\ud83d\udce4 \u53d1\u9001\u5230 VS Code</button>
         </div>
 
     </div>
