@@ -1,39 +1,50 @@
-/* ============ 按钮通用样式 ============ */
+/* ============ 代码块右上角按钮容器 ============ */
 .aca-button-wrapper {
-    margin: 4px 0;
-    padding: 6px 10px;
-    background: #1a1a2e;
-    border: 1px solid #16213e;
-    border-radius: 6px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    position: relative;
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    z-index: 100;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    max-width: 100%;
+    gap: 4px;
+    padding: 3px 4px;
+    background: rgba(26, 26, 46, 0.85);
+    border: 1px solid rgba(22, 33, 62, 0.6);
+    border-radius: 6px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    pointer-events: auto;
+}
+
+/* 鼠标悬停在代码块上时显示按钮 */
+pre:hover .aca-button-wrapper,
+code:hover .aca-button-wrapper,
+.aca-button-wrapper:hover {
+    opacity: 1;
 }
 
 .aca-apply-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    padding: 8px 16px;
+    gap: 4px;
+    padding: 4px 10px;
     border: none;
-    border-radius: 6px;
+    border-radius: 4px;
     background: linear-gradient(135deg, #007acc, #0098ff);
     color: white;
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.2s ease;
-    box-shadow: 0 2px 8px rgba(0, 122, 204, 0.3);
+    transition: all 0.15s ease;
+    box-shadow: 0 1px 4px rgba(0, 122, 204, 0.3);
+    white-space: nowrap;
 }
 
 .aca-apply-btn:hover {
     background: linear-gradient(135deg, #005f99, #007acc);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0, 122, 204, 0.5);
+    box-shadow: 0 2px 8px rgba(0, 122, 204, 0.5);
 }
 
 .aca-apply-btn:disabled {
@@ -50,56 +61,8 @@
     background: linear-gradient(135deg, #d73a49, #ff6b6b) !important;
 }
 
-/* 关闭/隐藏按钮（通用） */
+/* 关闭按钮 */
 .aca-dismiss-btn {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 20px;
-    height: 20px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.1);
-    color: #6c7086;
-    font-size: 14px;
-    line-height: 1;
-    cursor: pointer;
-    opacity: 0;
-    transition: all 0.15s ease;
-    z-index: 10;
-    padding: 0;
-}
-
-.aca-button-wrapper:hover .aca-dismiss-btn,
-.aca-dismiss-btn:focus {
-    opacity: 1;
-}
-
-.aca-dismiss-btn:hover {
-    background: rgba(255, 80, 80, 0.6);
-    color: white;
-}
-
-/* 手动发送按钮（代码块右上角小按钮） */
-.aca-manual-btn {
-    padding: 4px 10px !important;
-    font-size: 11px !important;
-    opacity: 0.6;
-    z-index: 100;
-}
-
-.aca-manual-btn:hover {
-    opacity: 1 !important;
-}
-
-/* 代码块右上角关闭按钮 */
-.aca-manual-close-btn {
-    position: absolute;
-    top: 5px;
-    right: 5px;
     width: 18px;
     height: 18px;
     display: flex;
@@ -108,46 +71,33 @@
     border: none;
     border-radius: 50%;
     background: rgba(255, 255, 255, 0.1);
-    color: #999;
-    font-size: 13px;
+    color: #6c7086;
+    font-size: 12px;
     line-height: 1;
     cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.15s ease;
-    z-index: 101;
+    transition: all 0.15s ease;
     padding: 0;
+    flex-shrink: 0;
 }
 
-pre:hover .aca-manual-close-btn,
-code:hover .aca-manual-close-btn {
-    opacity: 0.7;
-}
-
-.aca-manual-close-btn:hover {
-    opacity: 1 !important;
+.aca-dismiss-btn:hover {
     background: rgba(255, 80, 80, 0.6);
     color: white;
 }
 
-/* 文件预览列表 */
-.aca-preview {
-    margin-top: 6px;
-    padding-left: 4px;
-}
-
-.aca-preview-item {
-    font-size: 12px;
-    color: #8b949e;
-    padding: 2px 0;
-    font-family: 'Cascadia Code', 'Fira Code', monospace;
-}
-
 /* 状态文本 */
 .aca-status {
-    display: block;
-    margin-top: 4px;
-    font-size: 11px;
+    display: none;
+    font-size: 10px;
     color: #8b949e;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.aca-status:not(:empty) {
+    display: inline;
 }
 
 /* ============ 选中文本悬浮按钮容器 ============ */

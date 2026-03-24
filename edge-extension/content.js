@@ -202,10 +202,16 @@
 
     function createButtonWrapper(element, btnText, btnTitle, onClick) {
         var container = element.closest('pre') || element;
+        // 确保容器有定位上下文
+        var pos = window.getComputedStyle(container).position;
+        if (pos === 'static' || pos === '') {
+            container.style.position = 'relative';
+        }
 
         var wrapper = document.createElement('div');
         wrapper.className = 'aca-button-wrapper';
 
+        // 关闭按钮
         var dismissBtn = document.createElement('button');
         dismissBtn.className = 'aca-dismiss-btn';
         dismissBtn.textContent = '\u00d7';
@@ -217,11 +223,13 @@
             element.setAttribute(PROCESSED_ATTR, 'dismissed');
         });
 
+        // 主按钮
         var btn = document.createElement('button');
         btn.className = BUTTON_CLASS;
         btn.textContent = btnText;
         if (btnTitle) btn.title = btnTitle;
 
+        // 状态文本
         var status = document.createElement('span');
         status.className = 'aca-status';
 
@@ -231,15 +239,12 @@
             onClick(btn, status);
         });
 
-        wrapper.appendChild(dismissBtn);
         wrapper.appendChild(btn);
+        wrapper.appendChild(dismissBtn);
         wrapper.appendChild(status);
 
-        if (container.nextSibling) {
-            container.parentElement.insertBefore(wrapper, container.nextSibling);
-        } else {
-            container.parentElement.appendChild(wrapper);
-        }
+        // 放在代码块容器内部（右上角，通过CSS absolute定位）
+        container.appendChild(wrapper);
 
         return wrapper;
     }
