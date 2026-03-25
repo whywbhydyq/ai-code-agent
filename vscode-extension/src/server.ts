@@ -490,6 +490,18 @@ export class AgentServer {
                 this.history.clear();
                 json({ success: true, message: '历史已清空' });
                 return;
+                case '/open-folder-new-window': {
+                const folderPath = data.path;
+                if (!folderPath) { json({ status: 'error', message: '缺少 path 参数' }, 400); return; }
+                try {
+                    // 在新窗口中打开文件夹
+                    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(folderPath), true);
+                    json({ success: true, message: `已在新窗口打开 ${folderPath}` });
+                } catch (err: any) {
+                    json({ success: false, message: err.message });
+                }
+                return;
+            }
             case '/focus':
                 vscode.commands.executeCommand('workbench.action.focusWindow');
                 json({ success: true });

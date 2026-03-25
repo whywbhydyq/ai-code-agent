@@ -587,6 +587,25 @@
             });
             return true;
         }
+                if (message.type === 'reconnect-ws') {
+            // 切换目标窗口后重连 WebSocket
+            if (ws) {
+                try { ws.close(); } catch (_) {}
+                ws = null;
+            }
+            if (wsReconnectTimer) {
+                clearTimeout(wsReconnectTimer);
+                wsReconnectTimer = null;
+            }
+            wsRetryDelay = 1000;
+            // 用新端口重连
+            if (message.port) {
+                chrome.storage.local.set({ serverPort: message.port });
+            }
+            setTimeout(wsConnect, 200);
+            showNotification('\u5df2\u5207\u6362\u76ee\u6807\u7a97\u53e3\uff0cWebSocket \u91cd\u8fde\u4e2d...', true);
+            return;
+        }
         if (message.type === 'scan-page-only') {
             if (!extensionEnabled) return;
             lastScanHash = '';

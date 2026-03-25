@@ -6,8 +6,6 @@ document.addEventListener('DOMContentLoaded', function() {
     var refreshBtn      = document.getElementById('refresh-btn');
     var autoJumpToggle  = document.getElementById('auto-jump-toggle');
     var autoScanToggle  = document.getElementById('auto-scan-toggle');
-    var portInput       = document.getElementById('port-input');
-    var savePortBtn     = document.getElementById('save-port-btn');
     var pathInput       = document.getElementById('path-input');
     var addPathBtn      = document.getElementById('add-path-btn');
     var projectList     = document.getElementById('project-list');
@@ -23,56 +21,25 @@ document.addEventListener('DOMContentLoaded', function() {
     var masterHint        = document.getElementById('master-hint');
     var mainContent       = document.getElementById('main-content');
     var btnCopyPrompt     = document.getElementById('btn-copy-prompt');
+    var instanceListSection = document.getElementById('instance-list-section');
 
     var currentWorkspace = '';
+    var currentPort = 9960;
     var discoveredInstances = [];
 
-    var PROMPT_TEMPLATE = '\u4f60\u597d\uff0c\u8bf7\u5728\u540e\u7eed\u5bf9\u8bdd\u4e2d\uff0c\u5f53\u6d89\u53ca\u4ee3\u7801\u6587\u4ef6\u7684\u521b\u5efa\u3001\u4fee\u6539\u6216\u5220\u9664\u65f6\uff0c\u4e25\u683c\u6309\u7167\u4ee5\u4e0b\u683c\u5f0f\u8f93\u51fa\u3002\n\n' +
-        '## \u683c\u5f0f\u89c4\u8303\n\n' +
-        '\u6240\u6709\u4ee3\u7801\u64cd\u4f5c\u6307\u4ee4\u5fc5\u987b\u5305\u88f9\u5728 ```agent-action \u4ee3\u7801\u5757\u4e2d\uff0c\u5185\u5bb9\u662f\u6807\u51c6 JSON\u3002\n\n' +
-        '### 1. \u521b\u5efa\u65b0\u6587\u4ef6 \u6216 \u5b8c\u6574\u66ff\u6362\u73b0\u6709\u6587\u4ef6\uff08\u63a8\u8350\uff09\n\n' +
-        '```agent-action\n' +
-        '{\n' +
-        '  "action": "write",\n' +
-        '  "file": "\u76f8\u5bf9\u8def\u5f84/\u6587\u4ef6\u540d.\u6269\u5c55\u540d",\n' +
-        '  "content": "\u5b8c\u6574\u7684\u6587\u4ef6\u5185\u5bb9..."\n' +
-        '}\n' +
-        '```\n\n' +
-        '### 2. \u5c40\u90e8\u4fee\u6539\u73b0\u6709\u6587\u4ef6\uff08\u4ec5\u7528\u4e8e\u8d85\u8fc7 100 \u884c\u7684\u5927\u6587\u4ef6\uff09\n\n' +
-        '```agent-action\n' +
-        '{\n' +
-        '  "action": "patch",\n' +
-        '  "file": "\u76f8\u5bf9\u8def\u5f84/\u6587\u4ef6\u540d.\u6269\u5c55\u540d",\n' +
-        '  "patches": [\n' +
-        '    {\n' +
-        '      "find": "\u8981\u66ff\u6362\u7684\u4ee3\u7801\uff082-3\u884c\u7b80\u5355\u4ee3\u7801\uff09",\n' +
-        '      "replace": "\u66ff\u6362\u540e\u7684\u4ee3\u7801"\n' +
-        '    }\n' +
-        '  ]\n' +
-        '}\n' +
-        '```\n\n' +
-        '### 3. \u5220\u9664\u6587\u4ef6\n\n' +
-        '```agent-action\n' +
-        '{\n' +
-        '  "action": "delete",\n' +
-        '  "file": "\u76f8\u5bf9\u8def\u5f84/\u6587\u4ef6\u540d.\u6269\u5c55\u540d"\n' +
-        '}\n' +
-        '```\n\n' +
-        '## \u91cd\u8981\u89c4\u5219\n\n' +
-        '1. \u6587\u4ef6 < 100 \u884c \u2192 \u7528 write \u8f93\u51fa\u5b8c\u6574\u5185\u5bb9\n' +
-        '2. find \u5b57\u6bb5\u53ea\u5199 2-3 \u884c\u7b80\u5355\u4ee3\u7801\uff0c\u4e0d\u542b\u5f15\u53f7\u3001\u53cd\u659c\u6760\u3001\u4e09\u5f15\u53f7\u3001\u6b63\u5219\n' +
-        '3. \u9047\u5230\u590d\u6742\u8f6c\u4e49\u5b57\u7b26\u7684\u4ee3\u7801 \u2192 \u76f4\u63a5\u7528 write \u4e0d\u8981\u7528 patch\n' +
-        '4. \u7edd\u5bf9\u4e0d\u8981\u7701\u7565\u4ee3\u7801\n' +
-        '5. \u6587\u4ef6\u8def\u5f84\u4f7f\u7528 / \u5206\u9694\n\n' +
-        '\u8bf7\u786e\u8ba4\u4f60\u7406\u89e3\u4e86\u4ee5\u4e0a\u683c\u5f0f\u8981\u6c42\u3002';
-
-    // \u5c1d\u8bd5\u4ece\u5916\u90e8\u6587\u4ef6\u52a0\u8f7d\u63d0\u793a\u8bcd
+    var PROMPT_TEMPLATE = '';
     try {
         fetch(chrome.runtime.getURL('prompt-template.txt'))
             .then(function(r) { return r.text(); })
             .then(function(t) { if (t && t.trim().length > 50) PROMPT_TEMPLATE = t; })
             .catch(function() {});
     } catch (_) {}
+    // Fallback
+    setTimeout(function() {
+        if (!PROMPT_TEMPLATE) {
+            PROMPT_TEMPLATE = '\u8bf7\u5728\u540e\u7eed\u5bf9\u8bdd\u4e2d\u4f7f\u7528 agent-action \u683c\u5f0f\u8f93\u51fa\u4ee3\u7801\u64cd\u4f5c\u3002';
+        }
+    }, 1000);
 
     btnCopyPrompt.addEventListener('click', function() {
         navigator.clipboard.writeText(PROMPT_TEMPLATE).then(function() {
@@ -99,7 +66,7 @@ document.addEventListener('DOMContentLoaded', function() {
     chrome.storage.local.get(
         ['serverPort', 'autoJump', 'autoScan', 'savedProjects', 'extensionEnabled'],
         function(result) {
-            if (result.serverPort) portInput.value = result.serverPort;
+            if (result.serverPort) currentPort = result.serverPort;
             autoJumpToggle.checked = result.autoJump !== false;
             autoScanToggle.checked = result.autoScan !== false;
             var enabled = result.extensionEnabled !== false;
@@ -139,29 +106,27 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // ========== \u591a\u7a97\u53e3\u7aef\u53e3\u626b\u63cf ==========
     function scanAllPorts(callback) {
-        chrome.storage.local.get(['serverPort'], function(r) {
-            var basePort = r.serverPort || 9960;
-            var instances = [];
-            var pending = 10;
-            for (var i = 0; i < 10; i++) {
-                (function(port) {
-                    fetch('http://127.0.0.1:' + port + '/status', { signal: AbortSignal.timeout(500) })
-                        .then(function(resp) { return resp.json(); })
-                        .then(function(data) {
-                            instances.push({ port: port, workspace: data.workspace || '', wsClients: data.wsClients || 0 });
-                        })
-                        .catch(function() {})
-                        .finally(function() {
-                            pending--;
-                            if (pending === 0) {
-                                instances.sort(function(a, b) { return a.port - b.port; });
-                                discoveredInstances = instances;
-                                callback(instances);
-                            }
-                        });
-                })(basePort + i);
-            }
-        });
+        var basePort = 9960;
+        var instances = [];
+        var pending = 10;
+        for (var i = 0; i < 10; i++) {
+            (function(port) {
+                fetch('http://127.0.0.1:' + port + '/status', { signal: AbortSignal.timeout(500) })
+                    .then(function(resp) { return resp.json(); })
+                    .then(function(data) {
+                        instances.push({ port: port, workspace: data.workspace || '', wsClients: data.wsClients || 0 });
+                    })
+                    .catch(function() {})
+                    .finally(function() {
+                        pending--;
+                        if (pending === 0) {
+                            instances.sort(function(a, b) { return a.port - b.port; });
+                            discoveredInstances = instances;
+                            callback(instances);
+                        }
+                    });
+            })(basePort + i);
+        }
     }
 
     function checkConnection() {
@@ -172,61 +137,87 @@ document.addEventListener('DOMContentLoaded', function() {
                 statusLabel.textContent = '\u672a\u8fde\u63a5 \u2014 \u68c0\u67e5 VS Code \u6269\u5c55\u662f\u5426\u542f\u52a8';
                 workspaceInfo.textContent = '';
                 currentWorkspace = '';
+                instanceListSection.innerHTML = '';
                 renderProjectList();
                 return;
             }
-            var active = instances[0];
+
+            // \u627e\u5230\u5f53\u524d\u7aef\u53e3\u5bf9\u5e94\u7684\u5b9e\u4f8b\uff0c\u5982\u679c\u5f53\u524d\u7aef\u53e3\u4e0d\u5728\u5217\u8868\u4e2d\u5219\u7528\u7b2c\u4e00\u4e2a
+            var active = instances.find(function(inst) { return inst.port === currentPort; }) || instances[0];
+            currentPort = active.port;
+            currentWorkspace = active.workspace;
+
+            chrome.storage.local.set({ serverPort: currentPort });
+
             statusDot.className = 'dot dot-green';
             if (instances.length === 1) {
-                statusLabel.textContent = 'VS Code \u5df2\u8fde\u63a5';
+                statusLabel.textContent = 'VS Code \u5df2\u8fde\u63a5 (\u7aef\u53e3:' + currentPort + ')';
             } else {
-                statusLabel.textContent = 'VS Code \u5df2\u8fde\u63a5\uff08\u53d1\u73b0 ' + instances.length + ' \u4e2a\u7a97\u53e3\uff09';
+                statusLabel.textContent = instances.length + ' \u4e2a VS Code \u7a97\u53e3 (\u5f53\u524d:' + currentPort + ')';
             }
-            currentWorkspace = active.workspace;
-            workspaceInfo.textContent = currentWorkspace ? '\ud83d\udcc2 ' + currentWorkspace : '';
-            if (instances.length > 1) renderInstanceList(instances);
+
+            var folderName = currentWorkspace.split(/[\/\\]/).pop() || currentWorkspace;
+            workspaceInfo.textContent = currentWorkspace ? '\ud83d\udcc2 ' + folderName : '';
+            workspaceInfo.title = currentWorkspace;
+
+            renderInstanceList(instances);
             renderProjectList();
         });
     }
 
     function renderInstanceList(instances) {
-        var existingList = document.getElementById('instance-list-section');
-        if (existingList) existingList.remove();
-        var section = document.createElement('div');
-        section.id = 'instance-list-section';
-        section.style.cssText = 'background:#313244;border-radius:8px;padding:10px 12px;margin-bottom:10px;';
+        instanceListSection.innerHTML = '';
+        if (instances.length <= 1) return;
+
         var title = document.createElement('div');
         title.className = 'section-title';
-        title.textContent = '\ud83e\ude9f \u591a\u7a97\u53e3\u5207\u6362';
-        section.appendChild(title);
+        title.textContent = '\u70b9\u51fb\u5207\u6362\u76ee\u6807\u7a97\u53e3\uff08\u4ee3\u7801\u53d1\u5230\u54ea\u4e2a VS Code\uff09';
+        instanceListSection.appendChild(title);
+
         instances.forEach(function(inst) {
             var item = document.createElement('div');
-            var isActive = inst.workspace === currentWorkspace;
-            item.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:6px 8px;margin-top:4px;background:#1e1e2e;border-radius:5px;font-size:11px;cursor:pointer;border:1px solid ' + (isActive ? '#89b4fa' : 'transparent') + ';';
+            var isActive = inst.port === currentPort;
+            item.className = 'instance-item' + (isActive ? ' active' : '');
+
             var name = document.createElement('span');
-            name.style.cssText = 'font-family:monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:' + (isActive ? '#89b4fa' : '#cdd6f4') + ';';
+            name.className = 'instance-name';
             var folderName = inst.workspace.split(/[\/\\]/).pop() || inst.workspace;
             name.textContent = (isActive ? '\u25cf ' : '\u25cb ') + folderName;
-            name.title = inst.workspace + ' (\u7aef\u53e3 ' + inst.port + ')';
+            name.title = inst.workspace;
+            name.style.color = isActive ? '#89b4fa' : '#cdd6f4';
+
             var portLabel = document.createElement('span');
-            portLabel.style.cssText = 'color:#6c7086;font-size:10px;flex-shrink:0;margin-left:8px;';
+            portLabel.className = 'instance-port';
             portLabel.textContent = ':' + inst.port;
+
             item.appendChild(name);
             item.appendChild(portLabel);
+
             item.addEventListener('click', function() {
-                chrome.storage.local.set({ serverPort: inst.port }, function() {
-                    portInput.value = inst.port;
-                    currentWorkspace = inst.workspace;
-                    showResult('\u2705 \u5df2\u5207\u6362\u5230: ' + folderName + ' (\u7aef\u53e3 ' + inst.port + ')', true);
-                    checkConnection();
+                currentPort = inst.port;
+                currentWorkspace = inst.workspace;
+                chrome.storage.local.set({ serverPort: inst.port });
+
+                // \u901a\u77e5\u6240\u6709\u9875\u9762\u7684 content.js \u91cd\u8fde WebSocket
+                chrome.tabs.query({}, function(tabs) {
+                    tabs.forEach(function(tab) {
+                        try {
+                            chrome.tabs.sendMessage(tab.id, { type: 'reconnect-ws', port: inst.port });
+                        } catch (_) {}
+                    });
                 });
+
+                showResult('\u2705 \u5df2\u5207\u6362\u5230: ' + folderName + ' (:' + inst.port + ')', true);
+                renderInstanceList(instances);
+
+                var fn = inst.workspace.split(/[\/\\]/).pop() || inst.workspace;
+                statusLabel.textContent = instances.length + ' \u4e2a VS Code \u7a97\u53e3 (\u5f53\u524d:' + inst.port + ')';
+                workspaceInfo.textContent = '\ud83d\udcc2 ' + fn;
+                workspaceInfo.title = inst.workspace;
             });
-            section.appendChild(item);
+
+            instanceListSection.appendChild(item);
         });
-        var statusCard = document.querySelector('.status-card');
-        if (statusCard && statusCard.nextSibling) {
-            statusCard.parentElement.insertBefore(section, statusCard.nextSibling);
-        }
     }
 
     refreshBtn.addEventListener('click', checkConnection);
@@ -247,23 +238,11 @@ document.addEventListener('DOMContentLoaded', function() {
         showResult(autoScanToggle.checked ? '\u5df2\u5f00\u542f\u81ea\u52a8\u68c0\u6d4b' : '\u5df2\u5173\u95ed\u81ea\u52a8\u68c0\u6d4b', true);
     });
 
-    savePortBtn.addEventListener('click', function() {
-        var port = parseInt(portInput.value, 10);
-        if (port >= 1024 && port <= 65535) {
-            chrome.storage.local.set({ serverPort: port }, function() {
-                showResult('\u7aef\u53e3\u5df2\u4fdd\u5b58\u4e3a ' + port, true);
-                checkConnection();
-            });
-        } else {
-            showResult('\u7aef\u53e3\u53f7\u65e0\u6548\uff081024~65535\uff09', false);
-        }
-    });
-
     btnScan.addEventListener('click', function() {
         chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
             if (tabs[0]) {
                 chrome.tabs.sendMessage(tabs[0].id, { type: 'scan-page-only' });
-                showResult('\u5df2\u89e6\u53d1\u9875\u9762\u626b\u63cf\uff0c\u6309\u94ae\u5c06\u663e\u793a\u5728\u4ee3\u7801\u5757\u65c1', true);
+                showResult('\u5df2\u89e6\u53d1\u9875\u9762\u626b\u63cf', true);
             }
         });
     });
@@ -296,12 +275,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 chrome.tabs.sendMessage(tabs[0].id, { type: 'collect-last-reply' }, function(resp) {
                     if (resp && resp.text) {
                         navigator.clipboard.writeText(resp.text).then(function() {
-                            showResult('\u2705 \u5df2\u590d\u5236\u6700\u8fd1AI\u56de\u590d\uff08' + resp.text.length + '\u5b57\u7b26\uff09\uff0c\u7c98\u8d34\u7ed9AI\u5373\u53ef', true);
-                        }).catch(function() {
-                            showResult('\u274c \u590d\u5236\u5931\u8d25', false);
-                        });
+                            showResult('\u2705 \u5df2\u590d\u5236(' + resp.text.length + '\u5b57\u7b26)', true);
+                        }).catch(function() { showResult('\u274c \u590d\u5236\u5931\u8d25', false); });
                     } else {
-                        showResult('\u274c \u672a\u627e\u5230AI\u56de\u590d\u5185\u5bb9', false);
+                        showResult('\u274c \u672a\u627e\u5230AI\u56de\u590d', false);
                     }
                 });
             });
@@ -315,32 +292,32 @@ document.addEventListener('DOMContentLoaded', function() {
             chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
                 if (!tabs[0]) return;
                 chrome.tabs.sendMessage(tabs[0].id, { type: 'collect-debug-info' }, function(resp) {
-                    var info = '=== AI Code Agent \u8c03\u8bd5\u4fe1\u606f ===\n';
-                    info += '\u9875\u9762: ' + tabs[0].url + '\n';
+                    var info = '=== AI Code Agent ===\n';
+                    info += 'Page: ' + tabs[0].url + '\n';
+                    info += 'Port: ' + currentPort + '\n';
+                    info += 'Workspace: ' + currentWorkspace + '\n';
+                    info += 'Instances: ' + discoveredInstances.length + '\n';
                     if (resp) {
-                        info += '\u63d2\u4ef6\u7248\u672c: ' + (resp.version || '\u672a\u77e5') + '\n';
-                        info += '\u63d2\u4ef6\u72b6\u6001: ' + (resp.enabled ? '\u542f\u7528' : '\u7981\u7528') + '\n';
-                        info += '\u81ea\u52a8\u626b\u63cf: ' + (resp.autoScan ? '\u5f00' : '\u5173') + '\n';
-                        info += 'WebSocket: ' + (resp.wsConnected ? '\u5df2\u8fde\u63a5' : '\u672a\u8fde\u63a5') + '\n';
-                        info += '\u4ee3\u7801\u5757\u603b\u6570: ' + resp.codeBlockCount + '\n';
-                        info += '\u5df2\u5904\u7406\u6570: ' + resp.processedCount + '\n';
-                        info += '\u6309\u94ae\u6570: ' + resp.buttonCount + '\n';
-                        info += '\u672a\u5904\u7406\u4ee3\u7801\u5757: ' + resp.unprocessedCount + '\n';
+                        info += 'Version: ' + (resp.version || '?') + '\n';
+                        info += 'Enabled: ' + resp.enabled + '\n';
+                        info += 'AutoScan: ' + resp.autoScan + '\n';
+                        info += 'WS: ' + resp.wsConnected + '\n';
+                        info += 'CodeBlocks: ' + resp.codeBlockCount + '\n';
+                        info += 'Processed: ' + resp.processedCount + '\n';
+                        info += 'Buttons: ' + resp.buttonCount + '\n';
+                        info += 'Unprocessed: ' + resp.unprocessedCount + '\n';
                         if (resp.unprocessedSamples && resp.unprocessedSamples.length > 0) {
-                            info += '\n--- \u672a\u5904\u7406\u7684\u4ee3\u7801\u5757\u793a\u4f8b ---\n';
+                            info += '--- samples ---\n';
                             resp.unprocessedSamples.forEach(function(s, i) {
-                                info += '[' + (i+1) + '] (' + s.tag + ', ' + s.length + '\u5b57\u7b26): ' + s.preview + '\n';
+                                info += (i+1) + '. ' + s.tag + '(' + s.length + '): ' + s.preview + '\n';
                             });
                         }
                     } else {
-                        info += '\u72b6\u6001: content.js \u672a\u54cd\u5e94\uff08\u53ef\u80fd\u672a\u52a0\u8f7d\uff09\n';
+                        info += 'content.js: not loaded\n';
                     }
-                    info += '=== END ===';
                     navigator.clipboard.writeText(info).then(function() {
-                        showResult('\u2705 \u8c03\u8bd5\u4fe1\u606f\u5df2\u590d\u5236\uff0c\u7c98\u8d34\u7ed9AI\u5373\u53ef', true);
-                    }).catch(function() {
-                        showResult('\u274c \u590d\u5236\u5931\u8d25', false);
-                    });
+                        showResult('\u2705 \u8c03\u8bd5\u4fe1\u606f\u5df2\u590d\u5236', true);
+                    }).catch(function() { showResult('\u274c \u590d\u5236\u5931\u8d25', false); });
                 });
             });
         });
@@ -350,10 +327,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (btnReloadPage) {
         btnReloadPage.addEventListener('click', function() {
             chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-                if (tabs[0]) {
-                    chrome.tabs.reload(tabs[0].id);
-                    showResult('\u9875\u9762\u5df2\u5237\u65b0', true);
-                }
+                if (tabs[0]) { chrome.tabs.reload(tabs[0].id); showResult('\u9875\u9762\u5df2\u5237\u65b0', true); }
             });
         });
     }
@@ -366,6 +340,7 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // ========== \u9879\u76ee\u5feb\u6377\u65b9\u5f0f ==========
     function getSavedProjects(callback) {
         chrome.storage.local.get(['savedProjects'], function(r) { callback(r.savedProjects || []); });
     }
@@ -382,17 +357,52 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         projects.forEach(function(p, i) {
             var item = document.createElement('div');
-            item.className = 'project-item' + (p === currentWorkspace ? ' active' : '');
+            // \u68c0\u67e5\u8fd9\u4e2a\u8def\u5f84\u662f\u5426\u5df2\u7ecf\u5728\u67d0\u4e2a VS Code \u7a97\u53e3\u4e2d\u6253\u5f00
+            var matchedInstance = discoveredInstances.find(function(inst) {
+                return inst.workspace && (inst.workspace === p || inst.workspace.replace(/\\/g, '/') === p.replace(/\\/g, '/'));
+            });
+            var isOpen = !!matchedInstance;
+            item.className = 'project-item' + (isOpen ? ' active' : '');
+
             var name = document.createElement('span');
             name.className = 'project-item-name';
-            name.textContent = p;
-            name.title = p;
+            var folderName = p.split(/[\/\\]/).pop() || p;
+            name.textContent = (isOpen ? '\u25cf ' : '') + folderName;
+            name.title = p + (isOpen ? ' (\u5df2\u5728 :' + matchedInstance.port + ' \u6253\u5f00)' : ' (\u70b9\u51fb\u5728\u65b0\u7a97\u53e3\u6253\u5f00)');
+
             name.addEventListener('click', function() {
-                chrome.runtime.sendMessage({ type: 'switch-workspace', path: p }, function(resp) {
-                    showResult(resp && resp.success ? '\u5df2\u5207\u6362: ' + p : (resp ? resp.message : '\u5931\u8d25'), resp && resp.success);
-                    setTimeout(checkConnection, 1500);
-                });
+                if (isOpen) {
+                    // \u5df2\u6253\u5f00 \u2192 \u5207\u6362\u5230\u8be5\u7a97\u53e3
+                    currentPort = matchedInstance.port;
+                    currentWorkspace = matchedInstance.workspace;
+                    chrome.storage.local.set({ serverPort: matchedInstance.port });
+                    chrome.tabs.query({}, function(tabs) {
+                        tabs.forEach(function(tab) {
+                            try { chrome.tabs.sendMessage(tab.id, { type: 'reconnect-ws', port: matchedInstance.port }); } catch (_) {}
+                        });
+                    });
+                    showResult('\u2705 \u5df2\u5207\u6362\u5230: ' + folderName + ' (:' + matchedInstance.port + ')', true);
+                    checkConnection();
+                } else {
+                    // \u672a\u6253\u5f00 \u2192 \u7528 VS Code \u5728\u65b0\u7a97\u53e3\u6253\u5f00
+                    // \u901a\u8fc7\u547d\u4ee4\u884c\u6253\u5f00\u65b0\u7a97\u53e3
+                    fetch('http://127.0.0.1:' + currentPort + '/open-folder-new-window', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path: p })
+                    }).then(function(resp) { return resp.json(); }).then(function(data) {
+                        if (data.success) {
+                            showResult('\u2705 \u5df2\u5728\u65b0\u7a97\u53e3\u6253\u5f00: ' + folderName, true);
+                            setTimeout(checkConnection, 3000);
+                        } else {
+                            showResult('\u274c ' + (data.message || '\u6253\u5f00\u5931\u8d25'), false);
+                        }
+                    }).catch(function() {
+                        showResult('\u274c \u65e0\u6cd5\u8fde\u63a5 VS Code', false);
+                    });
+                }
             });
+
             var del = document.createElement('span');
             del.className = 'project-item-del';
             del.textContent = '\u00d7';
@@ -405,6 +415,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     renderProjectList(list);
                 });
             });
+
             item.appendChild(name);
             item.appendChild(del);
             projectList.appendChild(item);
