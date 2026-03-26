@@ -13,6 +13,7 @@ import { processAction, resetBatchMode } from './diffManager';
 import { HistoryManager } from './historyManager';
 import { execSync } from 'child_process';
 import { createHash } from 'crypto';
+import { hasClaudeMd } from './claudeMd';
 
 const MAX_BODY_SIZE = 10 * 1024 * 1024;
 const WS_MAGIC = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -410,6 +411,7 @@ export class AgentServer {
                 workspace: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
                 port: this.actualPort,
                 wsClients: this.wsClients.size,
+                hasClaudeMd: hasClaudeMd(),
                 version: '1.1.0',
             });
             return;
