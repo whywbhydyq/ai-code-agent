@@ -11,11 +11,17 @@
     var autoJumpEnabled = true;
     var serverPort = 9960;
 
+    // 每个标签页独立端口：sessionStorage 刷新后保留，关闭标签页后清除
+    var _savedTabPort = null;
+    try { _savedTabPort = sessionStorage.getItem('aca-server-port'); } catch (_) {}
+    if (_savedTabPort) serverPort = parseInt(_savedTabPort, 10);
+
     chrome.storage.local.get(['extensionEnabled', 'autoScan', 'autoJump', 'serverPort'], function(result) {
         extensionEnabled = result.extensionEnabled !== false;
         autoScanEnabled = result.autoScan !== false;
         autoJumpEnabled = result.autoJump !== false;
-        if (result.serverPort) serverPort = result.serverPort;
+        // 仅在没有标签页专属端口时使用全局端口
+        if (!_savedTabPort && result.serverPort) serverPort = result.serverPort;
         if (extensionEnabled && autoScanEnabled) {
             setTimeout(scanPage, 1500);
             startPolling();
@@ -25,12 +31,9 @@
         }
     });
 
-    // 监听端口变化（切换窗口时）
     chrome.storage.onChanged.addListener(function(changes) {
         if (changes.autoJump) autoJumpEnabled = changes.autoJump.newValue !== false;
-        if (changes.serverPort && changes.serverPort.newValue) {
-            serverPort = changes.serverPort.newValue;
-        }
+        // 不再监听 serverPort 变化，由 reconnect-ws 消息控制每个标签页的端口
     });
 
     function looksLikeAction(text) {
@@ -148,7 +151,6 @@
         return false;
     }
 
-    // ======================== 直接HTTP发送（快速，跳过background.js） ========================
     function httpSend(endpoint, payload) {
         return fetch('http://127.0.0.1:' + serverPort + endpoint, {
             method: 'POST',
@@ -167,13 +169,10 @@
         var timeoutId = setTimeout(function() {
             if (responded) return;
             responded = true;
-            if (callback) callback({ success: false, message: '\u8bf7\u6c42\u8d85\u65f6(10s)\uff0c\u68c0\u67e5VS Code\u662f\u5426\u6253\u5f00\u4e86\u6b63\u786e\u7684\u9879\u76ee' });
+            if (callback) callback({ success: false, message: '\u8bf7\u6c42\u8d85\u65f6(10s)' });
         }, 10000);
-
-        // 直接用HTTP发送，不经过background.js，更快
         var endpoint = payload.actions ? '/apply' : '/apply-text';
         var body = payload.actions ? { type: 'actions', actions: payload.actions } : { type: 'raw-text', text: payload.text };
-
         httpSend(endpoint, body).then(function(data) {
             if (responded) return;
             responded = true;
@@ -276,14 +275,10 @@
         );
     }
 
-    // ======================== 扫描（带内存优化） ========================
     var lastScanHash = '';
-    var lastCodeBlockCount = 0;
 
     function scanPage() {
         if (!extensionEnabled || !autoScanEnabled) return;
-
-        // 快速检查：只统计数量和未处理数，不遍历内容
         var allBlocks = document.querySelectorAll('pre, code');
         var unprocessedCount = 0;
         for (var ci = 0; ci < allBlocks.length; ci++) {
@@ -297,20 +292,16 @@
             var el = allBlocks[ei];
             if (el.getAttribute(PROCESSED_ATTR)) continue;
             if (isCodeBlockHeader(el)) continue;
-
             var text = el.textContent || '';
             if (text.trim().length < 10) continue;
-
             var target;
             if (el.tagName === 'CODE' && el.closest('pre')) {
                 target = el.closest('pre');
             } else {
                 target = el;
             }
-
             if (target.getAttribute(PROCESSED_ATTR)) continue;
             if (hasDirectButtonWrapper(target)) continue;
-
             var actions = extractActions(text);
             if (actions.length > 0) {
                 addApplyButton(target, actions);
@@ -334,10 +325,8 @@
     });
     observer.observe(document.body, { childList: true, subtree: true });
 
-    // ======================== 智能轮询（页面活跃时才扫描） ========================
     var pollInterval = null;
     var isPageVisible = true;
-
     document.addEventListener('visibilitychange', function() {
         isPageVisible = !document.hidden;
     });
@@ -346,7 +335,6 @@
         if (pollInterval) return;
         pollInterval = setInterval(function() {
             if (!extensionEnabled || !autoScanEnabled) return;
-            // 页面不可见时跳过扫描，节省内存和CPU
             if (!isPageVisible) return;
             scanPage();
         }, 3000);
@@ -355,7 +343,7 @@
         if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
     }
 
-    // ======================== 选中文本浮动按钮 ========================
+    // ======================== 浮动按钮 ========================
     var floatingContainer = null;
     var floatingTimeout = null;
 
@@ -423,7 +411,7 @@
         if (floatingContainer && !floatingContainer.contains(e.target)) removeFloatingBtn();
     });
 
-    // ======================== 开关 ========================
+    // ======================== 启用/禁用 ========================
     function disableExtension() {
         extensionEnabled = false;
         stopPolling();
@@ -442,7 +430,6 @@
         if (!ws) wsConnect();
     }
 
-    // ======================== 收集AI回复 ========================
     function collectLastAIReply() {
         var selectors = [
             'div[class*="response"]', 'div[class*="assistant"]',
@@ -475,17 +462,37 @@
         }).join('\n\n');
     }
 
-    // ======================== 消息处理 ========================
+    // ======================== 消息监听 ========================
     chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
+        // 返回当前标签页绑定的端口
+        if (message.type === 'get-current-port') {
+            sendResponse({ port: serverPort });
+            return true;
+        }
+
+        // 从 popup 注入文本到 AI 输入框
+        if (message.type === 'inject-text-to-input') {
+            if (message.text) {
+                injectToAIInput(message.text);
+                showNotification('\u2705 \u5df2\u6ce8\u5165\u5230\u8f93\u5165\u6846', true);
+            }
+            return;
+        }
+
+        // 切换端口（保存到 sessionStorage 实现标签页独立）
         if (message.type === 'reconnect-ws') {
             if (ws) { try { ws.close(); } catch (_) {} ws = null; }
             if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
             wsRetryDelay = 1000;
-            if (message.port) serverPort = message.port;
+            if (message.port) {
+                serverPort = message.port;
+                try { sessionStorage.setItem('aca-server-port', String(serverPort)); } catch (_) {}
+            }
             setTimeout(wsConnect, 200);
             showNotification('\u5df2\u5207\u6362\u7a97\u53e3\uff0c\u91cd\u8fde\u4e2d...', true);
             return;
         }
+
         if (message.type === 'update-auto-jump') {
             autoJumpEnabled = message.enabled;
             return;
@@ -505,7 +512,7 @@
                     if (text.length > 10) unprocessed.push({ tag: el.tagName, length: text.length, preview: text.substring(0, 80).replace(/\n/g, ' ') });
                 }
             });
-            sendResponse({ version: '1.2.5', enabled: extensionEnabled, autoScan: autoScanEnabled, wsConnected: ws && ws.readyState === WebSocket.OPEN, serverPort: serverPort, codeBlockCount: codeBlocks.length, processedCount: processed.length, buttonCount: buttons.length, unprocessedCount: unprocessed.length, unprocessedSamples: unprocessed.slice(0, 5) });
+            sendResponse({ version: '1.3.0', enabled: extensionEnabled, autoScan: autoScanEnabled, wsConnected: ws && ws.readyState === WebSocket.OPEN, serverPort: serverPort, codeBlockCount: codeBlocks.length, processedCount: processed.length, buttonCount: buttons.length, unprocessedCount: unprocessed.length, unprocessedSamples: unprocessed.slice(0, 5) });
             return true;
         }
         if (message.type === 'scan-page-only') {
@@ -537,6 +544,7 @@
         }
     });
 
+    // ======================== 通知 ========================
     function showNotification(text, success) {
         var existing = document.querySelector('.aca-notification');
         if (existing) existing.remove();
@@ -552,7 +560,7 @@
         }, 3000);
     }
 
-    console.log('[AI Code Agent] Content script loaded. v1.2.5');
+    console.log('[AI Code Agent] Content script loaded. v1.3.0');
 
     // ======================== WebSocket ========================
     var ws = null;
