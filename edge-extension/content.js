@@ -9,11 +9,13 @@
     var extensionEnabled = true;
     var autoScanEnabled = true;
     var autoJumpEnabled = true;
+    var serverPort = 9960;
 
-    chrome.storage.local.get(['extensionEnabled', 'autoScan', 'autoJump'], function(result) {
+    chrome.storage.local.get(['extensionEnabled', 'autoScan', 'autoJump', 'serverPort'], function(result) {
         extensionEnabled = result.extensionEnabled !== false;
         autoScanEnabled = result.autoScan !== false;
         autoJumpEnabled = result.autoJump !== false;
+        if (result.serverPort) serverPort = result.serverPort;
         if (extensionEnabled && autoScanEnabled) {
             setTimeout(scanPage, 1500);
             startPolling();
@@ -23,8 +25,12 @@
         }
     });
 
+    // 监听端口变化（切换窗口时）
     chrome.storage.onChanged.addListener(function(changes) {
         if (changes.autoJump) autoJumpEnabled = changes.autoJump.newValue !== false;
+        if (changes.serverPort && changes.serverPort.newValue) {
+            serverPort = changes.serverPort.newValue;
+        }
     });
 
     function looksLikeAction(text) {
@@ -96,46 +102,28 @@
         var trimmed = text.trim();
         var lines = trimmed.split('\n');
         var nonEmptyLines = lines.filter(function(l) { return l.trim().length > 0; });
-
         if (nonEmptyLines.length < 2) return true;
         if (trimmed.length < 40) return true;
-
         var terminalCount = 0;
         var stepCount = 0;
         var naturalLangCount = 0;
-
         for (var i = 0; i < nonEmptyLines.length; i++) {
             var line = nonEmptyLines[i].trim();
-            if (/^[$>]\s/.test(line) || /^PS\s/.test(line) || /^C:\\/.test(line)) {
-                terminalCount++;
-                continue;
-            }
-            if (/^\d+[\.\)\u3001]\s/.test(line)) {
-                stepCount++;
-                continue;
-            }
-            if (/[\u2192\-\>]/.test(line) && /[\u4e00-\u9fff]/.test(line)) {
-                stepCount++;
-                continue;
-            }
+            if (/^[$>]\s/.test(line) || /^PS\s/.test(line) || /^C:\\/.test(line)) { terminalCount++; continue; }
+            if (/^\d+[\.\)\u3001]\s/.test(line)) { stepCount++; continue; }
+            if (/[\u2192\-\>]/.test(line) && /[\u4e00-\u9fff]/.test(line)) { stepCount++; continue; }
             var chineseChars = (line.match(/[\u4e00-\u9fff]/g) || []).length;
-            if (chineseChars > line.length * 0.3 && line.length > 5) {
-                naturalLangCount++;
-                continue;
-            }
+            if (chineseChars > line.length * 0.3 && line.length > 5) { naturalLangCount++; continue; }
         }
-
         if (nonEmptyLines.length > 0 && terminalCount / nonEmptyLines.length > 0.6) return true;
         if (nonEmptyLines.length > 0 && stepCount / nonEmptyLines.length > 0.5) return true;
         if (nonEmptyLines.length > 0 && naturalLangCount / nonEmptyLines.length > 0.5) return true;
-
         var cmdRegex = /^(cd|ls|dir|mkdir|rm|cp|mv|cat|echo|npm|npx|yarn|pnpm|git|pip|python|node|cargo|go|docker|kubectl|brew|apt|sudo|chmod|chown|curl|wget|code|vsce)\s/i;
         var cmdCount = 0;
         for (var j = 0; j < nonEmptyLines.length; j++) {
             if (cmdRegex.test(nonEmptyLines[j].trim())) cmdCount++;
         }
         if (nonEmptyLines.length > 0 && cmdCount / nonEmptyLines.length > 0.5) return true;
-
         return false;
     }
 
@@ -154,26 +142,24 @@
         return false;
     }
 
-    // [修复] 只检查直接父元素是否已有按钮，不再向上遍历整个DOM树
-    // 这样同一个AI回复中的多个代码块都能独立显示按钮
     function hasDirectButtonWrapper(el) {
         var container = el.closest('pre') || el;
-        // 检查这个代码块紧邻的下一个兄弟是否已经是按钮
-        var next = container.nextElementSibling;
-        if (next && next.classList && next.classList.contains('aca-button-wrapper')) return true;
+        if (container.querySelector('.aca-button-wrapper')) return true;
         return false;
+    }
+
+    // ======================== 直接HTTP发送（快速，跳过background.js） ========================
+    function httpSend(endpoint, payload) {
+        return fetch('http://127.0.0.1:' + serverPort + endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        }).then(function(r) { return r.json(); });
     }
 
     function jumpToVSCode() {
         if (!autoJumpEnabled) return;
-        chrome.storage.local.get(['serverPort'], function(r) {
-            var port = r.serverPort || 9960;
-            fetch('http://127.0.0.1:' + port + '/focus', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: '{}'
-            }).catch(function() {});
-        });
+        httpSend('/focus', {}).catch(function() {});
     }
 
     function sendToVSCode(payload, callback) {
@@ -181,97 +167,83 @@
         var timeoutId = setTimeout(function() {
             if (responded) return;
             responded = true;
-            if (callback) callback({ success: false, message: '请求超时（15秒），请检查VS Code是否打开了正确的项目' });
-        }, 15000);
+            if (callback) callback({ success: false, message: '\u8bf7\u6c42\u8d85\u65f6(10s)\uff0c\u68c0\u67e5VS Code\u662f\u5426\u6253\u5f00\u4e86\u6b63\u786e\u7684\u9879\u76ee' });
+        }, 10000);
 
-        chrome.runtime.sendMessage(
-            payload.actions
-                ? { type: 'send-actions', actions: payload.actions }
-                : { type: 'send-raw-text', text: payload.text },
-            function(response) {
-                if (responded) return;
-                responded = true;
-                clearTimeout(timeoutId);
-                if (response && response.success) {
-                    jumpToVSCode();
-                }
-                if (callback) callback(response);
-            }
-        );
+        // 直接用HTTP发送，不经过background.js，更快
+        var endpoint = payload.actions ? '/apply' : '/apply-text';
+        var body = payload.actions ? { type: 'actions', actions: payload.actions } : { type: 'raw-text', text: payload.text };
+
+        httpSend(endpoint, body).then(function(data) {
+            if (responded) return;
+            responded = true;
+            clearTimeout(timeoutId);
+            var success = data.status === 'success' || data.success;
+            if (success) jumpToVSCode();
+            if (callback) callback({ success: success, message: data.message || '' });
+        }).catch(function(err) {
+            if (responded) return;
+            responded = true;
+            clearTimeout(timeoutId);
+            if (callback) callback({ success: false, message: 'VS Code\u670d\u52a1\u5668\u672a\u542f\u52a8' });
+        });
     }
 
     function createButtonWrapper(element, btnText, btnTitle, onClick) {
         var container = element.closest('pre') || element;
-        // 确保容器有定位上下文
         var pos = window.getComputedStyle(container).position;
         if (pos === 'static' || pos === '') {
             container.style.position = 'relative';
         }
-
         var wrapper = document.createElement('div');
         wrapper.className = 'aca-button-wrapper';
-
-        // 关闭按钮
         var dismissBtn = document.createElement('button');
         dismissBtn.className = 'aca-dismiss-btn';
         dismissBtn.textContent = '\u00d7';
         dismissBtn.title = '\u9690\u85cf';
         dismissBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
+            e.preventDefault(); e.stopPropagation();
             wrapper.remove();
             element.setAttribute(PROCESSED_ATTR, 'dismissed');
         });
-
-        // 主按钮
         var btn = document.createElement('button');
         btn.className = BUTTON_CLASS;
         btn.textContent = btnText;
         if (btnTitle) btn.title = btnTitle;
-
-        // 状态文本
         var status = document.createElement('span');
         status.className = 'aca-status';
-
         btn.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
+            e.preventDefault(); e.stopPropagation();
             onClick(btn, status);
         });
-
         wrapper.appendChild(btn);
         wrapper.appendChild(dismissBtn);
         wrapper.appendChild(status);
-
-        // 放在代码块容器内部（右上角，通过CSS absolute定位）
         container.appendChild(wrapper);
-
         return wrapper;
     }
 
     function addApplyButton(element, actions) {
         if (element.getAttribute(PROCESSED_ATTR)) return;
         element.setAttribute(PROCESSED_ATTR, 'true');
-
         var fileList = actions.map(function(a) { return a.action + ': ' + a.file; }).join('\n');
-
         createButtonWrapper(
             element,
-            '\u26a1 \u5e94\u7528\u5230 VS Code (' + actions.length + ' \u4e2a\u6587\u4ef6)',
+            '\u26a1 \u5e94\u7528 (' + actions.length + ')',
             fileList,
             function(btn, status) {
                 btn.disabled = true;
-                btn.textContent = '\u23f3 \u53d1\u9001\u4e2d...';
+                btn.textContent = '\u23f3...';
                 sendToVSCode({ actions: actions }, function(response) {
                     if (response && response.success) {
-                        btn.textContent = '\u2705 \u5df2\u53d1\u9001\u5230 VS Code';
+                        btn.textContent = '\u2705';
                         btn.classList.add('aca-success');
                         status.textContent = response.message || '';
                     } else {
-                        btn.textContent = '\u274c \u53d1\u9001\u5931\u8d25\uff08\u70b9\u51fb\u91cd\u8bd5\uff09';
+                        btn.textContent = '\u274c \u91cd\u8bd5';
                         btn.classList.add('aca-error');
                         btn.disabled = false;
-                        status.textContent = response ? response.message : '\u65e0\u6cd5\u8fde\u63a5 VS Code';
+                        status.textContent = response ? response.message : '';
                     }
                 });
             }
@@ -281,51 +253,201 @@
     function addManualButton(element) {
         if (element.getAttribute(PROCESSED_ATTR)) return;
         element.setAttribute(PROCESSED_ATTR, 'true');
-
         createButtonWrapper(
             element,
-            '\ud83d\udce4 \u53d1\u9001\u5230 VS Code',
-            '\u53d1\u9001\u6b64\u4ee3\u7801\u5757\u5230 VS Code',
+            '\ud83d\udce4 VS Code',
+            '\u53d1\u9001\u6b64\u4ee3\u7801\u5757',
             function(btn, status) {
                 var code = element.textContent || '';
                 if (!code.trim()) return;
                 btn.disabled = true;
-                btn.textContent = '\u23f3 \u53d1\u9001\u4e2d...';
+                btn.textContent = '\u23f3...';
                 sendToVSCode({ text: code }, function(response) {
                     if (response && response.success) {
-                        btn.textContent = '\u2705 \u5df2\u53d1\u9001';
+                        btn.textContent = '\u2705';
                         btn.classList.add('aca-success');
-                        status.textContent = response.message || '';
                     } else {
-                        btn.textContent = '\u274c \u53d1\u9001\u5931\u8d25\uff08\u70b9\u51fb\u91cd\u8bd5\uff09';
+                        btn.textContent = '\u274c \u91cd\u8bd5';
                         btn.classList.add('aca-error');
                         btn.disabled = false;
-                        status.textContent = response ? response.message : '\u65e0\u6cd5\u8fde\u63a5 VS Code';
                     }
                 });
             }
         );
     }
 
+    // ======================== 扫描（带内存优化） ========================
     var lastScanHash = '';
+    var lastCodeBlockCount = 0;
 
-    function getPageCodeHash() {
-        var els = document.querySelectorAll('pre, code');
-        var total = 0;
-        var unprocessed = 0;
-        els.forEach(function(el) {
-            if (!el.getAttribute(PROCESSED_ATTR)) {
-                total += (el.textContent || '').length;
-                unprocessed++;
+    function scanPage() {
+        if (!extensionEnabled || !autoScanEnabled) return;
+
+        // 快速检查：只统计数量和未处理数，不遍历内容
+        var allBlocks = document.querySelectorAll('pre, code');
+        var unprocessedCount = 0;
+        for (var ci = 0; ci < allBlocks.length; ci++) {
+            if (!allBlocks[ci].getAttribute(PROCESSED_ATTR)) unprocessedCount++;
+        }
+        var hash = allBlocks.length + ':' + unprocessedCount;
+        if (hash === lastScanHash) return;
+        lastScanHash = hash;
+
+        for (var ei = 0; ei < allBlocks.length; ei++) {
+            var el = allBlocks[ei];
+            if (el.getAttribute(PROCESSED_ATTR)) continue;
+            if (isCodeBlockHeader(el)) continue;
+
+            var text = el.textContent || '';
+            if (text.trim().length < 10) continue;
+
+            var target;
+            if (el.tagName === 'CODE' && el.closest('pre')) {
+                target = el.closest('pre');
+            } else {
+                target = el;
             }
-        });
-        return els.length + ':' + unprocessed + ':' + total;
+
+            if (target.getAttribute(PROCESSED_ATTR)) continue;
+            if (hasDirectButtonWrapper(target)) continue;
+
+            var actions = extractActions(text);
+            if (actions.length > 0) {
+                addApplyButton(target, actions);
+            } else if (!looksLikeNonCode(text)) {
+                addManualButton(target);
+            }
+        }
     }
+
+    // ======================== MutationObserver ========================
+    var scanTimeout = null;
+    var observer = new MutationObserver(function(mutations) {
+        if (!extensionEnabled || !autoScanEnabled) return;
+        var hasNewNodes = false;
+        for (var i = 0; i < mutations.length; i++) {
+            if (mutations[i].addedNodes.length > 0) { hasNewNodes = true; break; }
+        }
+        if (!hasNewNodes) return;
+        if (scanTimeout) clearTimeout(scanTimeout);
+        scanTimeout = setTimeout(scanPage, 600);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // ======================== 智能轮询（页面活跃时才扫描） ========================
+    var pollInterval = null;
+    var isPageVisible = true;
+
+    document.addEventListener('visibilitychange', function() {
+        isPageVisible = !document.hidden;
+    });
+
+    function startPolling() {
+        if (pollInterval) return;
+        pollInterval = setInterval(function() {
+            if (!extensionEnabled || !autoScanEnabled) return;
+            // 页面不可见时跳过扫描，节省内存和CPU
+            if (!isPageVisible) return;
+            scanPage();
+        }, 3000);
+    }
+    function stopPolling() {
+        if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    }
+
+    // ======================== 选中文本浮动按钮 ========================
+    var floatingContainer = null;
+    var floatingTimeout = null;
+
+    function removeFloatingBtn() {
+        if (floatingContainer) { floatingContainer.remove(); floatingContainer = null; }
+        if (floatingTimeout) { clearTimeout(floatingTimeout); floatingTimeout = null; }
+    }
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') removeFloatingBtn();
+    });
+
+    document.addEventListener('mouseup', function(e) {
+        if (!extensionEnabled) return;
+        if (e.target.closest('.aca-floating-container') || e.target.classList.contains(BUTTON_CLASS)) return;
+        removeFloatingBtn();
+        setTimeout(function() {
+            var selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0) return;
+            var text = selection.toString().trim();
+            if (text.length < 15) return;
+            if (looksLikeNonCode(text)) return;
+            var range = selection.getRangeAt(0);
+            var rect = range.getBoundingClientRect();
+            var btnTop = Math.max(rect.top - 44, 8);
+            if (btnTop + 40 > window.innerHeight) btnTop = Math.max(window.innerHeight - 50, 8);
+            var btnLeft = Math.min(Math.max(rect.left, 8), window.innerWidth - 220);
+            floatingContainer = document.createElement('div');
+            floatingContainer.className = 'aca-floating-container';
+            floatingContainer.style.top = btnTop + 'px';
+            floatingContainer.style.left = btnLeft + 'px';
+            var sendBtn = document.createElement('button');
+            sendBtn.className = 'aca-floating-send-btn';
+            sendBtn.textContent = '\ud83d\udce4 \u53d1\u9001\u5230 VS Code';
+            sendBtn.addEventListener('click', function(ev) {
+                ev.preventDefault(); ev.stopPropagation();
+                var actions = extractActions(text);
+                sendBtn.textContent = '\u23f3...';
+                sendBtn.disabled = true;
+                if (actions.length > 0) {
+                    sendToVSCode({ actions: actions }, function(resp) {
+                        showNotification(resp && resp.success ? '\u2705 \u5df2\u53d1\u9001 ' + actions.length + ' \u4e2a\u64cd\u4f5c' : (resp ? resp.message : '\u5931\u8d25'), resp && resp.success);
+                        removeFloatingBtn();
+                    });
+                } else {
+                    sendToVSCode({ text: text }, function(resp) {
+                        showNotification(resp && resp.success ? '\u2705 \u5df2\u53d1\u9001' : (resp ? resp.message : '\u5931\u8d25'), resp && resp.success);
+                        removeFloatingBtn();
+                    });
+                }
+            });
+            var closeBtn = document.createElement('button');
+            closeBtn.className = 'aca-floating-close-btn';
+            closeBtn.textContent = '\u00d7';
+            closeBtn.title = 'Esc';
+            closeBtn.addEventListener('click', function(ev) { ev.preventDefault(); ev.stopPropagation(); removeFloatingBtn(); });
+            floatingContainer.appendChild(sendBtn);
+            floatingContainer.appendChild(closeBtn);
+            document.body.appendChild(floatingContainer);
+            floatingTimeout = setTimeout(removeFloatingBtn, 8000);
+        }, 200);
+    });
+
+    document.addEventListener('mousedown', function(e) {
+        if (floatingContainer && !floatingContainer.contains(e.target)) removeFloatingBtn();
+    });
+
+    // ======================== 开关 ========================
+    function disableExtension() {
+        extensionEnabled = false;
+        stopPolling();
+        removeFloatingBtn();
+        document.querySelectorAll('.aca-button-wrapper').forEach(function(el) { el.remove(); });
+        document.querySelectorAll('.aca-floating-container').forEach(function(el) { el.remove(); });
+        document.querySelectorAll('.aca-notification').forEach(function(el) { el.remove(); });
+        document.querySelectorAll('[' + PROCESSED_ATTR + ']').forEach(function(el) { el.removeAttribute(PROCESSED_ATTR); });
+        lastScanHash = '';
+    }
+
+    function enableExtension() {
+        extensionEnabled = true;
+        lastScanHash = '';
+        if (autoScanEnabled) { scanPage(); startPolling(); }
+        if (!ws) wsConnect();
+    }
+
+    // ======================== 收集AI回复 ========================
     function collectLastAIReply() {
         var selectors = [
-            'div[class*="response"]', 'div[class*="assistant"]', 'div[data-is-streaming]',
+            'div[class*="response"]', 'div[class*="assistant"]',
             'div[data-message-author-role="assistant"]', 'div.markdown',
-            'div[class*="message"]', 'div[class*="answer"]', 'div[class*="reply"]', 'article',
+            'div[class*="message"]', 'div[class*="answer"]', 'article',
         ];
         var allReplies = [];
         for (var si = 0; si < selectors.length; si++) {
@@ -338,14 +460,7 @@
                 if (allReplies.length > 0) break;
             }
         }
-        if (allReplies.length === 0) {
-            var codeTexts = [];
-            document.querySelectorAll('pre').forEach(function(el) {
-                var t = (el.textContent || '').trim();
-                if (t.length > 20) codeTexts.push(t);
-            });
-            return codeTexts.length > 0 ? codeTexts.join('\n\n---\n\n') : '';
-        }
+        if (allReplies.length === 0) return '';
         allReplies.sort(function(a, b) { return b.length - a.length; });
         var unique = [];
         for (var i = 0; i < allReplies.length; i++) {
@@ -355,210 +470,24 @@
             }
             if (!isDup) unique.push(allReplies[i]);
         }
-        var recent = unique.slice(-3);
-        var result = '';
-        recent.forEach(function(item, idx) {
-            result += '--- \\u56de\\u590d ' + (idx + 1) + ' ---\n' + item.text + '\n\n';
-        });
-        return result;
-    }
-    function scanPage() {
-        if (!extensionEnabled || !autoScanEnabled) return;
-
-        var hash = getPageCodeHash();
-        if (hash === lastScanHash) return;
-        lastScanHash = hash;
-
-        // [修复] 不再用 processedParents Set，每个 pre/code 独立判断
-        var codeEls = document.querySelectorAll('pre, code');
-        codeEls.forEach(function(el) {
-            if (el.getAttribute(PROCESSED_ATTR)) return;
-            if (isCodeBlockHeader(el)) return;
-            if (hasDirectButtonWrapper(el)) return;
-
-            var text = el.textContent || '';
-            if (text.trim().length < 10) return;
-
-            // 确定目标元素：code在pre内时用pre，否则用自身
-            var target;
-            if (el.tagName === 'CODE' && el.closest('pre')) {
-                target = el.closest('pre');
-            } else {
-                target = el;
-            }
-
-            // 如果target已处理或已有按钮，跳过
-            if (target.getAttribute(PROCESSED_ATTR)) return;
-            if (hasDirectButtonWrapper(target)) return;
-
-            var actions = extractActions(text);
-            if (actions.length > 0) {
-                addApplyButton(target, actions);
-            } else if (!looksLikeNonCode(text)) {
-                addManualButton(target);
-            }
-        });
+        return unique.slice(-3).map(function(item, idx) {
+            return '--- ' + (idx + 1) + ' ---\n' + item.text;
+        }).join('\n\n');
     }
 
-    // ======================== MutationObserver ========================
-    var scanTimeout = null;
-    var observer = new MutationObserver(function(mutations) {
-        if (!extensionEnabled || !autoScanEnabled) return;
-        var hasNewNodes = mutations.some(function(m) { return m.addedNodes.length > 0; });
-        if (!hasNewNodes) return;
-        if (scanTimeout) clearTimeout(scanTimeout);
-        scanTimeout = setTimeout(scanPage, 600);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    // ======================== 定时轮询兜底 ========================
-    var pollInterval = null;
-    function startPolling() {
-        if (pollInterval) return;
-        pollInterval = setInterval(function() {
-            if (!extensionEnabled || !autoScanEnabled) return;
-            scanPage();
-        }, 3000);
-    }
-    function stopPolling() {
-        if (pollInterval) {
-            clearInterval(pollInterval);
-            pollInterval = null;
+    // ======================== 消息处理 ========================
+    chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
+        if (message.type === 'reconnect-ws') {
+            if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+            if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+            wsRetryDelay = 1000;
+            if (message.port) serverPort = message.port;
+            setTimeout(wsConnect, 200);
+            showNotification('\u5df2\u5207\u6362\u7a97\u53e3\uff0c\u91cd\u8fde\u4e2d...', true);
+            return;
         }
-    }
-
-    // ======================== 选中文本浮动按钮 ========================
-    var floatingContainer = null;
-    var floatingTimeout = null;
-
-    function removeFloatingBtn() {
-        if (floatingContainer) {
-            floatingContainer.remove();
-            floatingContainer = null;
-        }
-        if (floatingTimeout) {
-            clearTimeout(floatingTimeout);
-            floatingTimeout = null;
-        }
-    }
-
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') removeFloatingBtn();
-    });
-
-    document.addEventListener('mouseup', function(e) {
-        if (!extensionEnabled) return;
-        if (
-            e.target.closest('.aca-floating-container') ||
-            e.target.classList.contains(BUTTON_CLASS)
-        ) return;
-
-        removeFloatingBtn();
-
-        setTimeout(function() {
-            var selection = window.getSelection();
-            if (!selection || selection.rangeCount === 0) return;
-            var text = selection.toString().trim();
-            if (text.length < 15) return;
-            if (looksLikeNonCode(text)) return;
-
-            var range = selection.getRangeAt(0);
-            var rect = range.getBoundingClientRect();
-            var btnTop = Math.max(rect.top - 44, 8);
-            if (btnTop + 40 > window.innerHeight) {
-                btnTop = Math.max(window.innerHeight - 50, 8);
-            }
-            var btnLeft = Math.min(Math.max(rect.left, 8), window.innerWidth - 220);
-
-            floatingContainer = document.createElement('div');
-            floatingContainer.className = 'aca-floating-container';
-            floatingContainer.style.top = btnTop + 'px';
-            floatingContainer.style.left = btnLeft + 'px';
-
-            var sendBtn = document.createElement('button');
-            sendBtn.className = 'aca-floating-send-btn';
-            sendBtn.textContent = '\ud83d\udce4 \u53d1\u9001\u5230 VS Code';
-
-            sendBtn.addEventListener('click', function(ev) {
-                ev.preventDefault();
-                ev.stopPropagation();
-                var actions = extractActions(text);
-                sendBtn.textContent = '\u23f3 \u53d1\u9001\u4e2d...';
-                sendBtn.disabled = true;
-
-                if (actions.length > 0) {
-                    sendToVSCode({ actions: actions }, function(resp) {
-                        showNotification(
-                            resp && resp.success
-                                ? '\u2705 \u5df2\u53d1\u9001 ' + actions.length + ' \u4e2a\u64cd\u4f5c\u5230 VS Code'
-                                : (resp ? resp.message : '\u8fde\u63a5\u5931\u8d25'),
-                            resp && resp.success
-                        );
-                        removeFloatingBtn();
-                    });
-                } else {
-                    sendToVSCode({ text: text }, function(resp) {
-                        showNotification(
-                            resp && resp.success
-                                ? '\u2705 \u5df2\u53d1\u9001\uff08\u8bf7\u5728 VS Code \u4e2d\u6307\u5b9a\u6587\u4ef6\u8def\u5f84\uff09'
-                                : (resp ? resp.message : '\u8fde\u63a5\u5931\u8d25'),
-                            resp && resp.success
-                        );
-                        removeFloatingBtn();
-                    });
-                }
-            });
-
-            var closeBtn = document.createElement('button');
-            closeBtn.className = 'aca-floating-close-btn';
-            closeBtn.textContent = '\u00d7';
-            closeBtn.title = '\u5173\u95ed (Esc)';
-            closeBtn.addEventListener('click', function(ev) {
-                ev.preventDefault();
-                ev.stopPropagation();
-                removeFloatingBtn();
-            });
-
-            floatingContainer.appendChild(sendBtn);
-            floatingContainer.appendChild(closeBtn);
-            document.body.appendChild(floatingContainer);
-
-            floatingTimeout = setTimeout(removeFloatingBtn, 8000);
-        }, 200);
-    });
-
-    document.addEventListener('mousedown', function(e) {
-        if (floatingContainer && !floatingContainer.contains(e.target)) removeFloatingBtn();
-    });
-
-    // ======================== 开关控制 ========================
-    function disableExtension() {
-        extensionEnabled = false;
-        stopPolling();
-        removeFloatingBtn();
-        document.querySelectorAll('.aca-button-wrapper').forEach(function(el) { el.remove(); });
-        document.querySelectorAll('.aca-floating-container').forEach(function(el) { el.remove(); });
-        document.querySelectorAll('.aca-notification').forEach(function(el) { el.remove(); });
-        document.querySelectorAll('[' + PROCESSED_ATTR + ']').forEach(function(el) {
-            el.removeAttribute(PROCESSED_ATTR);
-        });
-        lastScanHash = '';
-    }
-
-    function enableExtension() {
-        extensionEnabled = true;
-        lastScanHash = '';
-        if (autoScanEnabled) {
-            scanPage();
-            startPolling();
-        }
-        if (!ws) wsConnect();
-    }
-
-     chrome.runtime.onMessage.addListener(function(message, sender, sendResponse) {
         if (message.type === 'collect-last-reply') {
-            var reply = collectLastAIReply();
-            if (sendResponse) sendResponse({ text: reply });
+            sendResponse({ text: collectLastAIReply() });
             return true;
         }
         if (message.type === 'collect-debug-info') {
@@ -569,49 +498,18 @@
             codeBlocks.forEach(function(el) {
                 if (!el.getAttribute(PROCESSED_ATTR) && !isCodeBlockHeader(el)) {
                     var text = (el.textContent || '').trim();
-                    if (text.length > 10) {
-                        unprocessed.push({ tag: el.tagName, length: text.length, preview: text.substring(0, 80).replace(/\n/g, ' ') });
-                    }
+                    if (text.length > 10) unprocessed.push({ tag: el.tagName, length: text.length, preview: text.substring(0, 80).replace(/\n/g, ' ') });
                 }
             });
-            if (sendResponse) sendResponse({
-                version: '1.2.3',
-                enabled: extensionEnabled,
-                autoScan: autoScanEnabled,
-                wsConnected: ws && ws.readyState === WebSocket.OPEN,
-                codeBlockCount: codeBlocks.length,
-                processedCount: processed.length,
-                buttonCount: buttons.length,
-                unprocessedCount: unprocessed.length,
-                unprocessedSamples: unprocessed.slice(0, 5)
-            });
+            sendResponse({ version: '1.2.5', enabled: extensionEnabled, autoScan: autoScanEnabled, wsConnected: ws && ws.readyState === WebSocket.OPEN, serverPort: serverPort, codeBlockCount: codeBlocks.length, processedCount: processed.length, buttonCount: buttons.length, unprocessedCount: unprocessed.length, unprocessedSamples: unprocessed.slice(0, 5) });
             return true;
-        }
-                if (message.type === 'reconnect-ws') {
-            // 切换目标窗口后重连 WebSocket
-            if (ws) {
-                try { ws.close(); } catch (_) {}
-                ws = null;
-            }
-            if (wsReconnectTimer) {
-                clearTimeout(wsReconnectTimer);
-                wsReconnectTimer = null;
-            }
-            wsRetryDelay = 1000;
-            // 用新端口重连
-            if (message.port) {
-                chrome.storage.local.set({ serverPort: message.port });
-            }
-            setTimeout(wsConnect, 200);
-            showNotification('\u5df2\u5207\u6362\u76ee\u6807\u7a97\u53e3\uff0cWebSocket \u91cd\u8fde\u4e2d...', true);
-            return;
         }
         if (message.type === 'scan-page-only') {
             if (!extensionEnabled) return;
             lastScanHash = '';
             autoScanEnabled = true;
             scanPage();
-            showNotification('\u5df2\u626b\u63cf\u9875\u9762\uff0c\u6309\u94ae\u5df2\u663e\u793a\u5728\u4ee3\u7801\u5757\u65c1', true);
+            showNotification('\u5df2\u626b\u63cf\u9875\u9762', true);
             return;
         }
         if (message.type === 'scan-and-send-all') {
@@ -620,31 +518,15 @@
             document.querySelectorAll('pre, code').forEach(function(el) {
                 extractActions(el.textContent || '').forEach(function(a) { allActions.push(a); });
             });
-            if (allActions.length === 0) {
-                showNotification('\u672a\u68c0\u6d4b\u5230\u53ef\u7528\u7684\u4ee3\u7801\u64cd\u4f5c\u6307\u4ee4', false);
-                return;
-            }
+            if (allActions.length === 0) { showNotification('\u672a\u68c0\u6d4b\u5230\u64cd\u4f5c\u6307\u4ee4', false); return; }
             sendToVSCode({ actions: allActions }, function(resp) {
-                showNotification(
-                    resp && resp.success
-                        ? '\u5df2\u53d1\u9001 ' + allActions.length + ' \u4e2a\u64cd\u4f5c\u5230 VS Code'
-                        : (resp ? resp.message : '\u8fde\u63a5\u5931\u8d25'),
-                    resp && resp.success
-                );
+                showNotification(resp && resp.success ? '\u5df2\u53d1\u9001 ' + allActions.length + ' \u4e2a\u64cd\u4f5c' : (resp ? resp.message : '\u5931\u8d25'), resp && resp.success);
             });
         }
-        if (message.type === 'show-notification') {
-            showNotification(message.message, message.success);
-        }
+        if (message.type === 'show-notification') { showNotification(message.message, message.success); }
         if (message.type === 'toggle-auto-scan') {
             autoScanEnabled = message.enabled;
-            if (autoScanEnabled && extensionEnabled) {
-                lastScanHash = '';
-                scanPage();
-                startPolling();
-            } else {
-                stopPolling();
-            }
+            if (autoScanEnabled && extensionEnabled) { lastScanHash = ''; scanPage(); startPolling(); } else { stopPolling(); }
         }
         if (message.type === 'toggle-extension') {
             if (message.enabled) { enableExtension(); } else { disableExtension(); }
@@ -666,7 +548,7 @@
         }, 3000);
     }
 
-    console.log('[AI Code Agent] Content script loaded. v1.2.3');
+    console.log('[AI Code Agent] Content script loaded. v1.2.5');
 
     // ======================== WebSocket ========================
     var ws = null;
@@ -678,46 +560,40 @@
 
     function wsConnect() {
         if (!extensionEnabled) return;
-        chrome.storage.local.get(['serverPort'], function(r) {
-            var port = r.serverPort || 9960;
-            try {
-                ws = new WebSocket('ws://127.0.0.1:' + port + '/ws');
-                ws.onopen = function() {
-                    console.log('[AI Code Agent] WebSocket connected');
-                    wsRetryDelay = 1000;
-                    if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
-                };
-                ws.onmessage = function(event) {
-                    try { handleWSMessage(JSON.parse(event.data)); } catch (_) {}
-                };
-                ws.onclose = function() {
-                    ws = null;
-                    if (extensionEnabled) {
-                        wsReconnectTimer = setTimeout(wsConnect, wsRetryDelay);
-                        wsRetryDelay = Math.min(wsRetryDelay * 2, WS_MAX_RETRY_DELAY);
-                    }
-                };
-                ws.onerror = function() {
-                    ws = null;
-                    if (extensionEnabled) {
-                        wsReconnectTimer = setTimeout(wsConnect, wsRetryDelay);
-                        wsRetryDelay = Math.min(wsRetryDelay * 2, WS_MAX_RETRY_DELAY);
-                    }
-                };
-            } catch (_) {
+        try {
+            ws = new WebSocket('ws://127.0.0.1:' + serverPort + '/ws');
+            ws.onopen = function() {
+                console.log('[AI Code Agent] WebSocket connected to :' + serverPort);
+                wsRetryDelay = 1000;
+                if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+            };
+            ws.onmessage = function(event) {
+                try { handleWSMessage(JSON.parse(event.data)); } catch (_) {}
+            };
+            ws.onclose = function() {
+                ws = null;
                 if (extensionEnabled) {
                     wsReconnectTimer = setTimeout(wsConnect, wsRetryDelay);
                     wsRetryDelay = Math.min(wsRetryDelay * 2, WS_MAX_RETRY_DELAY);
                 }
+            };
+            ws.onerror = function() {
+                ws = null;
+                if (extensionEnabled) {
+                    wsReconnectTimer = setTimeout(wsConnect, wsRetryDelay);
+                    wsRetryDelay = Math.min(wsRetryDelay * 2, WS_MAX_RETRY_DELAY);
+                }
+            };
+        } catch (_) {
+            if (extensionEnabled) {
+                wsReconnectTimer = setTimeout(wsConnect, wsRetryDelay);
+                wsRetryDelay = Math.min(wsRetryDelay * 2, WS_MAX_RETRY_DELAY);
             }
-        });
+        }
     }
 
     function wsSend(data) {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify(data));
-            return true;
-        }
+        if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(data)); return true; }
         return false;
     }
 
@@ -725,70 +601,35 @@
         return new Promise(function(resolve) {
             var reqId = (++wsReqId) + '_' + Date.now();
             data.reqId = reqId;
-            var timeout = setTimeout(function() {
-                pendingRequests.delete(reqId);
-                resolve({ success: false, message: 'timeout' });
-            }, 10000);
-            pendingRequests.set(reqId, function(resp) {
-                clearTimeout(timeout);
-                pendingRequests.delete(reqId);
-                resolve(resp);
-            });
-            if (!wsSend(data)) {
-                clearTimeout(timeout);
-                pendingRequests.delete(reqId);
-                resolve({ success: false, message: 'not connected' });
-            }
+            var timeout = setTimeout(function() { pendingRequests.delete(reqId); resolve({ success: false, message: 'timeout' }); }, 10000);
+            pendingRequests.set(reqId, function(resp) { clearTimeout(timeout); pendingRequests.delete(reqId); resolve(resp); });
+            if (!wsSend(data)) { clearTimeout(timeout); pendingRequests.delete(reqId); resolve({ success: false, message: 'not connected' }); }
         });
     }
 
     function handleWSMessage(data) {
-        if (data.reqId && pendingRequests.has(data.reqId)) {
-            pendingRequests.get(data.reqId)(data);
-            return;
-        }
-
+        if (data.reqId && pendingRequests.has(data.reqId)) { pendingRequests.get(data.reqId)(data); return; }
         switch (data.type) {
-            case 'connected':
-                console.log('[AI Code Agent] VS Code workspace:', data.workspace);
-                break;
+            case 'connected': console.log('[AI Code Agent] workspace:', data.workspace); break;
             case 'inject-to-input':
                 injectToAIInput(data.message);
-                showNotification(
-                    data.mode === 'error'
-                        ? '\u2705 \u9519\u8bef\u4fe1\u606f\u5df2\u6ce8\u5165\u5230 AI \u8f93\u5165\u6846'
-                        : '\u2705 \u5df2\u6ce8\u5165 ' + (data.mode === 'file' ? '\u6587\u4ef6' : '\u9009\u4e2d\u4ee3\u7801') + ' \u5230 AI \u8f93\u5165\u6846',
-                    true
-                );
+                showNotification(data.mode === 'error' ? '\u2705 \u9519\u8bef\u4fe1\u606f\u5df2\u6ce8\u5165' : '\u2705 \u5df2\u6ce8\u5165\u5230\u8f93\u5165\u6846', true);
                 break;
-            case 'progress':
-                showNotification('\u23f3 [' + data.current + '/' + data.total + ']: ' + data.file, true);
-                break;
-            case 'done':
-                showNotification('\ud83c\udf89 ' + data.summary, true);
-                break;
-            case 'history-updated':
-                chrome.runtime.sendMessage({ type: 'history-updated', history: data.history });
-                break;
+            case 'progress': showNotification('\u23f3 [' + data.current + '/' + data.total + '] ' + data.file, true); break;
+            case 'done': showNotification('\ud83c\udf89 ' + data.summary, true); break;
+            case 'history-updated': chrome.runtime.sendMessage({ type: 'history-updated', history: data.history }); break;
         }
     }
 
     function injectToAIInput(text) {
-        var selectors = [
-            'textarea[placeholder*="message" i]',
-            'textarea[placeholder*="\u6d88\u606f" i]',
-            'textarea[placeholder*="\u8f93\u5165" i]',
-            'div[contenteditable="true"][role="textbox"]',
-            'div[contenteditable="true"]',
-            'textarea',
-        ];
+        var selectors = ['textarea[placeholder*="message" i]', 'textarea[placeholder*="\u6d88\u606f" i]', 'textarea[placeholder*="\u8f93\u5165" i]', 'div[contenteditable="true"][role="textbox"]', 'div[contenteditable="true"]', 'textarea'];
         var target = null;
         for (var i = 0; i < selectors.length; i++) {
             var el = document.querySelector(selectors[i]);
             if (el) { target = el; break; }
         }
         if (!target) {
-            showNotification('\u274c \u672a\u627e\u5230 AI \u8f93\u5165\u6846\uff0c\u8bf7\u624b\u52a8\u7c98\u8d34', false);
+            showNotification('\u274c \u672a\u627e\u5230\u8f93\u5165\u6846', false);
             navigator.clipboard.writeText(text).catch(function() {});
             return;
         }
@@ -803,9 +644,7 @@
             target.dispatchEvent(new InputEvent('input', { bubbles: true }));
         }
         target.focus();
-        if (target.tagName === 'TEXTAREA') {
-            target.selectionStart = target.selectionEnd = target.value.length;
-        }
+        if (target.tagName === 'TEXTAREA') { target.selectionStart = target.selectionEnd = target.value.length; }
         target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
