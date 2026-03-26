@@ -262,6 +262,16 @@
         </div>
 
         <div class="manual-section">
+             <!-- 导出项目代码 -->
+        <div class="path-section">
+            <div class="section-title">&#x1F4E6; 导出项目代码为 Word</div>
+            <p style="font-size:11px;color:#6c7086;margin-bottom:6px;">将当前 VS Code 项目的所有代码导出为 .docx 文件</p>
+            <div style="margin-bottom:6px;">
+                <label style="font-size:11px;color:#6c7086;">排除的文件/目录（每行一个，支持 *.md 通配符）：</label>
+                <textarea id="export-excludes" style="height:60px;margin-top:4px;" placeholder="node_modules&#10;*.md&#10;dist/&#10;export_code.py"></textarea>
+            </div>
+            <button class="btn-primary" id="btn-export" style="background:#fab387;color:#1e1e2e;">&#x1F4E6; 一键导出当前项目</button>
+        </div>
             <div class="section-title">手动粘贴 AI 回复</div>
             <textarea id="manual-text" placeholder="粘贴包含 agent-action 代码块的 AI 回复文本..."></textarea>
             <button class="btn-primary" id="manual-send-btn">&#x1F4E4; 发送到 VS Code</button>

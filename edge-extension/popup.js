@@ -436,7 +436,47 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     pathInput.addEventListener('keydown', function(e) { if (e.key === 'Enter') addPathBtn.click(); });
+    // ========== 导出项目代码 ==========
+    var btnExport = document.getElementById('btn-export');
+    var exportExcludes = document.getElementById('export-excludes');
 
+    // 加载上次的排除列表
+    chrome.storage.local.get(['exportExcludes'], function(r) {
+        if (r.exportExcludes) exportExcludes.value = r.exportExcludes;
+    });
+
+    if (btnExport) {
+        btnExport.addEventListener('click', function() {
+            var excludeText = exportExcludes.value.trim();
+            var excludes = [];
+            if (excludeText) {
+                excludes = excludeText.split('\n').map(function(l) { return l.trim(); }).filter(function(l) { return l && !l.startsWith('#'); });
+            }
+
+            // 保存排除列表
+            chrome.storage.local.set({ exportExcludes: excludeText });
+
+            btnExport.disabled = true;
+            btnExport.textContent = '\u23f3 导出中...';
+
+            fetch('http://127.0.0.1:' + currentPort + '/export-project', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ excludes: excludes, maxSize: 200 })
+            }).then(function(resp) { return resp.json(); }).then(function(data) {
+                if (data.success) {
+                    showResult('\u2705 ' + data.message, true);
+                } else {
+                    showResult('\u274c ' + (data.message || '导出失败'), false);
+                }
+            }).catch(function() {
+                showResult('\u274c 无法连接 VS Code', false);
+            }).finally(function() {
+                btnExport.disabled = false;
+                btnExport.textContent = '\ud83d\udce6 一键导出当前项目';
+            });
+        });
+    }
     manualSendBtn.addEventListener('click', function() {
         var text = manualText.value.trim();
         if (!text) { showResult('\u8bf7\u8f93\u5165\u6587\u672c', false); return; }

@@ -502,6 +502,66 @@ export class AgentServer {
                 }
                 return;
             }
+            case '/export-project': {
+                const excludes = data.excludes || [];
+                const maxSize = data.maxSize || 200;
+                const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                if (!workspaceRoot) {
+                    json({ success: false, message: '请先打开一个工作区' });
+                    return;
+                }
+
+                // 查找 export_code.py 的位置
+                const fs = require('fs');
+                const path = require('path');
+                let scriptPath = '';
+                const possiblePaths = [
+                    path.join(workspaceRoot, 'export_code.py'),
+                    path.join(workspaceRoot, '..', 'ai-code-agent', 'export_code.py'),
+                    path.join(require('os').homedir(), 'ai-code-agent', 'export_code.py'),
+                ];
+                for (const p of possiblePaths) {
+                    if (fs.existsSync(p)) { scriptPath = p; break; }
+                }
+
+                if (!scriptPath) {
+                    json({ success: false, message: '找不到 export_code.py，请确保它在项目根目录或 ai-code-agent 目录中' });
+                    return;
+                }
+
+                const outputFile = path.join(workspaceRoot, path.basename(workspaceRoot) + '_code_export.docx');
+
+                // 构建命令
+                let cmd = `python "${scriptPath}" "${workspaceRoot}" -o "${outputFile}" --max-size ${maxSize}`;
+                if (excludes.length > 0) {
+                    cmd += ' --exclude ' + excludes.map((e: string) => `"${e}"`).join(' ');
+                }
+
+                this.log.appendLine(`[Export] Running: ${cmd}`);
+                json({ success: true, message: '正在导出...', outputFile: outputFile });
+
+                // 异步执行
+                const { exec } = require('child_process');
+                exec(cmd, { cwd: workspaceRoot, maxBuffer: 10 * 1024 * 1024 }, (error: any, stdout: string, stderr: string) => {
+                    if (error) {
+                        this.log.appendLine(`[Export] Error: ${error.message}`);
+                        vscode.window.showErrorMessage(`导出失败: ${error.message}`);
+                    } else {
+                        this.log.appendLine(`[Export] Done: ${stdout}`);
+                        vscode.window.showInformationMessage(`项目代码已导出: ${outputFile}`);
+                        // 在文件管理器中打开
+                        const { shell } = require('electron') || {};
+                        if (shell && shell.showItemInFolder) {
+                            shell.showItemInFolder(outputFile);
+                        } else {
+                            vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(outputFile));
+                        }
+                    }
+                    // 通知浏览器
+                    this.broadcast({ type: 'export-done', success: !error, file: outputFile, message: error ? error.message : stdout });
+                });
+                return;
+            }
             case '/focus':
                 vscode.commands.executeCommand('workbench.action.focusWindow');
                 json({ success: true });
