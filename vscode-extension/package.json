@@ -2,7 +2,7 @@
   "name": "ai-code-agent",
   "displayName": "AI Code Agent",
   "description": "接收网页端 AI 的代码回答，在 VS Code 中展示 Diff 预览并应用修改",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "publisher": "whywbhydyq",
   "license": "MIT",
   "repository": {
@@ -21,13 +21,15 @@
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "aiCodeAgent.startServer",     "title": "AI Agent: 启动服务器" },
-      { "command": "aiCodeAgent.stopServer",      "title": "AI Agent: 停止服务器" },
-      { "command": "aiCodeAgent.undoLastChange",  "title": "AI Agent: 撤销上一次 AI 修改" },
-      { "command": "aiCodeAgent.openLog",         "title": "AI Agent: 打开操作日志" },
-      { "command": "aiCodeAgent.sendCurrentFile", "title": "AI Agent: 发送当前文件到浏览器 AI" },
-      { "command": "aiCodeAgent.sendSelection",   "title": "AI Agent: 发送选中代码到浏览器 AI" },
-      { "command": "aiCodeAgent.sendError",       "title": "AI Agent: 发送错误信息到浏览器 AI" }
+      { "command": "aiCodeAgent.startServer",       "title": "AI Agent: 启动服务器" },
+      { "command": "aiCodeAgent.stopServer",        "title": "AI Agent: 停止服务器" },
+      { "command": "aiCodeAgent.undoLastChange",    "title": "AI Agent: 撤销上一次 AI 修改" },
+      { "command": "aiCodeAgent.openLog",           "title": "AI Agent: 打开操作日志" },
+      { "command": "aiCodeAgent.sendCurrentFile",   "title": "AI Agent: 发送当前文件到浏览器 AI" },
+      { "command": "aiCodeAgent.sendSelection",     "title": "AI Agent: 发送选中代码到浏览器 AI" },
+      { "command": "aiCodeAgent.sendError",         "title": "AI Agent: 发送错误信息到浏览器 AI" },
+      { "command": "aiCodeAgent.sendDirectory",     "title": "AI Agent: 发送目录文件到浏览器 AI" },
+      { "command": "aiCodeAgent.sendContext",       "title": "AI Agent: 智能上下文收集并发送" }
     ],
     "keybindings": [
       {
@@ -43,6 +45,14 @@
       {
         "command": "aiCodeAgent.sendError",
         "key": "ctrl+shift+alt+e"
+      },
+      {
+        "command": "aiCodeAgent.sendContext",
+        "key": "ctrl+shift+alt+c"
+      },
+      {
+        "command": "aiCodeAgent.sendDirectory",
+        "key": "ctrl+shift+alt+d"
       }
     ],
     "configuration": {
@@ -51,7 +61,8 @@
         "aiCodeAgent.port":                  { "type": "number",  "default": 9960, "description": "本地服务器端口" },
         "aiCodeAgent.autoStart":             { "type": "boolean", "default": true, "description": "VS Code 启动时自动启动服务器" },
         "aiCodeAgent.requireConfirmation":   { "type": "boolean", "default": true, "description": "修改前显示 Diff 预览" },
-        "aiCodeAgent.autoGitSnapshot":       { "type": "boolean", "default": true, "description": "修改前自动 Git 快照" }
+        "aiCodeAgent.autoGitSnapshot":       { "type": "boolean", "default": true, "description": "修改前自动 Git 快照" },
+        "aiCodeAgent.autoAttachClaudeMd":    { "type": "boolean", "default": true, "description": "发送代码时自动附加 CLAUDE.md 项目说明" }
       }
     }
   },
