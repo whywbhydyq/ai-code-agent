@@ -486,6 +486,10 @@
             showNotification('\u5df2\u5207\u6362\u7a97\u53e3\uff0c\u91cd\u8fde\u4e2d...', true);
             return;
         }
+        if (message.type === 'update-auto-jump') {
+            autoJumpEnabled = message.enabled;
+            return;
+        }
         if (message.type === 'collect-last-reply') {
             sendResponse({ text: collectLastAIReply() });
             return true;
