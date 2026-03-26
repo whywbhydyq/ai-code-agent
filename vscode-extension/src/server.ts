@@ -13,6 +13,7 @@ import { processAction, resetBatchMode } from './diffManager';
 import { HistoryManager } from './historyManager';
 import { execSync } from 'child_process';
 import { createHash } from 'crypto';
+import { handleNewRoutes } from './serverRoutes';
 import { hasClaudeMd } from './claudeMd';
 
 const MAX_BODY_SIZE = 10 * 1024 * 1024;
@@ -446,6 +447,7 @@ export class AgentServer {
     }
 
     private async routePost(url: string, data: any, json: (data: any, code?: number) => void) {
+        if (await handleNewRoutes(url, data, json)) return;
         switch (url) {
             case '/apply': {
                 const actions: AgentAction[] = data.actions || [];
