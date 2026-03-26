@@ -1,171 +1,277 @@
 # ⚡ AI Code Agent
 
-**将任意网页端 AI（ChatGPT、Claude、Gemini、DeepSeek、Kimi...）的代码回答一键应用到本地 VS Code**
+**一句话介绍：** 在任意 AI 网页聊天中生成的代码，一键应用到你的本地项目。
 
-不需要 API Key，不绑定任何 AI 服务，完全免费开源。
+> 不需要 API Key，不绑定任何 AI 服务商，完全免费开源。
+> 支持 ChatGPT、Claude、Gemini、DeepSeek、Kimi、通义千问等所有网页端 AI。
 
-![status](https://img.shields.io/badge/状态-可用-brightgreen) ![version](https://img.shields.io/badge/版本-1.2.0-blue) ![license](https://img.shields.io/badge/协议-MIT-green)
+![version](https://img.shields.io/badge/版本-1.3.0-blue)
+![license](https://img.shields.io/badge/协议-MIT-green)
 
-## ✨ 核心功能
+---
 
-| 功能 | 说明 |
-|------|------|
-| 🔍 自动检测 | 自动识别 AI 回答中的代码操作指令，显示「应用」按钮 |
-| ⚡ 一键应用 | 点击按钮直接创建/修改/删除本地文件 |
-| 🔄 Diff 预览 | 修改前在 VS Code 中预览差异，支持「全部接受/全部拒绝」 |
-| 🩹 Patch 模式 | 大文件只修改需要的部分，不用替换整个文件 |
-| 🛡 安全防护 | 敏感文件拦截 + AI 偷懒检测 + Git 自动快照 |
-| ↩️ 一键撤销 | 通过 Git 回退上一次 AI 修改 |
-| 🔗 双向通信 | 从 VS Code 发送文件/选中代码/错误信息到浏览器 AI |
-| 🔌 总开关 | 一键开关插件，关闭后清除所有页面注入 |
-| 📋 一键提示词 | 新用户一键复制 AI 提示词，开箱即用 |
-| 🚀 自动跳转 | 发送代码后自动切换到 VS Code 窗口 |
-| 🪟 多窗口支持 | 自动寻找可用端口，同时开多个项目不冲突 |
-| 🧹 智能过滤 | 终端命令、步骤说明等非代码内容不显示发送按钮 |
+## 🎬 30 秒了解它能做什么
 
-## 🆕 v1.2.0 更新内容
+```
+你在浏览器里问 AI："帮我写一个登录页面"
+          ↓
+AI 回复了代码
+          ↓
+代码旁边自动出现 ⚡ 按钮
+          ↓
+点一下 → VS Code 弹出 Diff 预览
+          ↓
+确认 → 文件自动创建/修改完成
+```
 
-### 性能优化
-- **MutationObserver 智能过滤**：仅在页面新增 `<pre>`/`<code>` 节点时触发扫描，减少 90%+ 无效扫描
-- **端口扫描缓存**：30 秒内复用已发现的服务器地址，避免每次操作都扫描 10 个端口
-- **fuzzyFind 行偏移预计算**：大文件 patch 匹配从 O(n²) 降到 O(n)
-- **HTTP body Buffer 拼接**：用 Buffer 数组替代字符串拼接，减少内存碎片
+**不用手动复制粘贴，不用手动创建文件，不用手动找到该改哪一行。**
 
-### 稳定性提升
-- **WebSocket continuation frame 支持**：正确处理浏览器分帧发送的大消息
-- **历史文件原子写入**：先写 `.tmp` 再 `rename`，防止崩溃导致文件损坏
-- **临时文件自动清理**：启动时清理超过 1 小时的旧 Diff 临时文件
-- **AI 偷懒检测修复**：改为逐行+行首锚定检测，不再误报源码中的字符串常量
+---
 
-### 体验改进
-- **浮动按钮边界修复**：防止选中文本按钮超出视口底部
-- **状态栏实时刷新**：每 5 秒同步 WebSocket 客户端数到 VS Code 状态栏
-- **提示词外置管理**：提示词从 `prompt-template.txt` 加载，便于独立维护
-- **连接失败自动清缓存**：VS Code 断开后自动清除端口缓存，下次重新扫描
+## 🚀 3 分钟安装
 
-## 🚀 快速开始
-
-### 1. 安装 VS Code 扩展
+### 第 1 步：安装 VS Code 扩展
 
 ```bash
 cd vscode-extension
 npm install
 npm run compile
-npx vsce package
 ```
 
-在 VS Code 中：`Ctrl+Shift+P` → `Install from VSIX` → 选择生成的 `.vsix` 文件
+然后双击项目根目录的 `dev.bat`（Windows）即可自动打包安装。
 
-### 2. 安装浏览器扩展
+或者手动安装：
+```bash
+npx vsce package --no-dependencies --allow-missing-repository
+```
+在 VS Code 中 `Ctrl+Shift+P` → `Install from VSIX` → 选择生成的 `.vsix` 文件。
 
-1. 打开 Edge → `edge://extensions/`（或 Chrome → `chrome://extensions/`）
+### 第 2 步：安装浏览器扩展
+
+1. 打开 Edge `edge://extensions/` 或 Chrome `chrome://extensions/`
 2. 开启「开发人员模式」
 3. 点击「加载解压缩的扩展」
-4. 选择 `edge-extension` 文件夹
+4. 选择项目中的 `edge-extension` 文件夹
 
-### 3. 开始使用
+### 第 3 步：告诉 AI 用什么格式回复
 
-1. 打开插件弹窗 → 点击 **📋 一键复制 AI 提示词**
-2. 将提示词粘贴到 AI 对话的第一条消息中
-3. AI 回复的代码旁会自动出现「⚡ 应用到 VS Code」按钮
-4. 点击按钮 → 在 VS Code 中预览 Diff → 确认应用
+1. 点击浏览器右上角的 ⚡ 插件图标
+2. 点击 **📋 一键复制 AI 提示词**
+3. 把提示词粘贴到你和 AI 对话的**第一条消息**中发送
+4. 之后 AI 回复的代码旁边会自动出现 ⚡ 按钮
 
-## 📖 使用场景
+**就这么简单，可以开始用了。**
 
-### 场景 1：AI 生成新文件
-AI 回复包含 `agent-action` 代码块 → 点击「应用」→ 文件自动创建
+---
 
-### 场景 2：AI 修改现有文件
-AI 用 `patch` 模式 → 只修改需要的部分 → Diff 预览确认
+## 📖 日常使用
 
-### 场景 3：发送代码给 AI
-在 VS Code 中选中代码 → `Ctrl+Shift+Alt+S` → 代码自动注入浏览器 AI 输入框
+### 场景 1：让 AI 帮你写代码
 
-### 场景 4：发送错误信息
-`Ctrl+Shift+Alt+E` → 粘贴错误信息 → AI 收到后帮你修复
+你对 AI 说：*"帮我在 src/utils/ 下创建一个日期格式化工具"*
+
+AI 回复代码 → 代码块右上角出现 **⚡ 应用** 按钮 → 点击 → VS Code 弹出 Diff 预览 → 点「接受」→ 文件自动创建好了。
+
+### 场景 2：让 AI 帮你改 bug
+
+1. 在 VS Code 中选中报错的代码
+2. 按 `Ctrl+Shift+Alt+S` → 代码自动发送到浏览器 AI 的输入框
+3. AI 给出修复方案 → 点 ⚡ 按钮 → 自动应用
+
+### 场景 3：发送错误信息
+
+按 `Ctrl+Shift+Alt+E` → 粘贴终端错误信息 → AI 输入框自动收到 → AI 帮你修复。
+
+### 场景 4：批量修改多个文件
+
+AI 一次回复中可以包含多个文件的修改，每个代码块旁边都有独立的 ⚡ 按钮。
+也可以点「全部接受」一次性应用所有修改。
+
+---
 
 ## ⌨️ 快捷键
 
 | 快捷键 | 功能 |
 |--------|------|
-| `Ctrl+Shift+Alt+F` | 发送当前文件到浏览器 AI |
-| `Ctrl+Shift+Alt+S` | 发送选中代码到浏览器 AI |
-| `Ctrl+Shift+Alt+E` | 发送错误信息到浏览器 AI |
-| `Esc` | 关闭浮动发送按钮 |
+| `Ctrl+Shift+Alt+F` | 发送当前文件给 AI |
+| `Ctrl+Shift+Alt+S` | 发送选中代码给 AI |
+| `Ctrl+Shift+Alt+E` | 发送错误信息给 AI |
+| `Esc` | 关闭浮动按钮 |
 
-## 🏗 架构
+---
+
+## 🔌 插件弹窗功能
+
+点击浏览器右上角 ⚡ 图标打开弹窗：
+
+| 区域 | 功能 |
+|------|------|
+| **顶部状态栏** | 连接状态、端口号、复制提示词、插件开关 |
+| **工作区选择器** | 开了多个 VS Code？点击芯片切换目标窗口 |
+| **核心按钮** | 扫描页面 / 复制AI回复 / 撤销修改 |
+| **最近操作** | 最近 5 条操作结果一目了然 |
+| **快捷发送** | 粘贴代码直接发送到 VS Code |
+| **导出项目** | 一键将项目代码导出为 Word 文档（可排除文件） |
+| **设置** | 自动跳转、自动扫描开关 |
+| **项目快捷方式** | 保存常用项目路径，点击在新窗口打开 |
+| **工具** | 重启服务器、查看日志、调试信息 |
+
+---
+
+## 🛡 安全机制
+
+不用担心 AI 乱改你的代码：
+
+- **Diff 预览**：每次修改前都弹出对比，你确认才写入
+- **Git 快照**：每次修改前自动 `git commit`，随时可以回退
+- **敏感文件拦截**：自动拦截 `.env`、`.git/`、`.ssh/`、`node_modules/` 等
+- **AI 偷懒检测**：如果 AI 输出了 `// ... existing code ...` 这种省略写法，会警告你
+- **路径越界检测**：防止写入工作区之外的文件
+- **纯本地通信**：所有数据只在 `127.0.0.1` 传输，不经过任何外部服务器
+
+---
+
+## 🪟 多窗口支持
+
+同时开了多个 VS Code 项目？没问题：
+
+- 每个 VS Code 窗口自动分配不同端口（9960、9961、9962...）
+- 插件弹窗自动发现所有窗口，显示为可点击的芯片
+- 点击芯片切换目标窗口，代码发送到正确的项目
+- WebSocket 自动重连，切换后立即生效
+
+---
+
+## 🏗 工作原理
 
 ```
-浏览器 AI 网页
- │
- ├── content.js（自动检测代码块 + 智能过滤 + MutationObserver 优化）
- │       │
- │       ▼
- ├── background.js（消息路由 + 端口探测缓存）
- │       │
- │       ▼  HTTP + WebSocket
- └── VS Code Extension
-        ├── server.ts（HTTP/WS 服务器 + 自动端口 + continuation frame）
-        ├── codeApplier.ts（JSON 解析 + Patch 引擎 + 行偏移优化）
-        ├── diffManager.ts（Diff 预览 + 批量确认 + Git 快照 + 临时文件清理）
-        └── historyManager.ts（操作历史 + 原子写入）
+  浏览器（任意 AI 网页）              VS Code
+  ┌─────────────────────┐          ┌──────────────────────┐
+  │                     │          │                      │
+  │  content.js         │  HTTP    │  server.ts           │
+  │  检测代码块          │────────→│  接收代码             │
+  │  显示 ⚡ 按钮        │          │                      │
+  │                     │          │  codeApplier.ts      │
+  │  background.js      │  WS     │  解析 JSON + Patch    │
+  │  消息路由            │←───────→│                      │
+  │                     │          │  diffManager.ts      │
+  │  popup.js           │          │  Diff 预览 + Git 快照 │
+  │  控制面板            │          │                      │
+  └─────────────────────┘          └──────────────────────┘
 ```
 
-## ⚙️ 配置
+---
+
+## ⚙️ VS Code 设置
 
 在 VS Code 设置中搜索 `AI Code Agent`：
 
 | 设置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `aiCodeAgent.port` | `9960` | 本地服务器端口 |
-| `aiCodeAgent.autoStart` | `true` | VS Code 启动时自动启动服务器 |
+| `aiCodeAgent.port` | `9960` | 起始端口（被占用会自动 +1） |
+| `aiCodeAgent.autoStart` | `true` | VS Code 启动时自动启动 |
 | `aiCodeAgent.requireConfirmation` | `true` | 修改前显示 Diff 预览 |
 | `aiCodeAgent.autoGitSnapshot` | `true` | 修改前自动 Git 快照 |
 
-## 🛡 安全机制
+---
 
-- ✅ 所有通信仅限 `127.0.0.1`，不经过外网
-- ✅ 修改前 Diff 预览，用户确认后才写入
-- ✅ 拦截 `.env`、`.git/`、`.ssh/`、`node_modules/` 等敏感路径
-- ✅ 检测 AI 偷懒输出（省略注释行）并警告，逐行锚定不误报
-- ✅ 每次修改前自动 Git commit，可一键回退
-- ✅ 路径越界检测，防止写入工作区外的文件
-- ✅ HTTP body 限制 10MB，WebSocket 缓冲区溢出自动断开
+## 📦 导出项目代码
+
+需要把项目代码发给 AI 看？两种方式：
+
+### 方式 1：在插件弹窗中一键导出
+
+1. 打开弹窗 → 展开「导出项目代码为 Word」
+2. 填写要排除的文件（比如 `*.md`、`dist/`）
+3. 点击「一键导出」→ 自动生成 .docx 文件
+
+### 方式 2：命令行
+
+```bash
+pip install python-docx
+python export_code.py
+python export_code.py --exclude "*.md" dist/ node_modules/
+python export_code.py -o my_project.docx --max-size 500
+```
+
+---
 
 ## 🌐 支持的 AI 平台
 
-理论上支持所有网页端 AI，已测试：
+理论上支持所有能显示代码块的网页端 AI：
 
-- ✅ ChatGPT（chat.openai.com）
-- ✅ Claude（claude.ai）
-- ✅ Google Gemini
-- ✅ DeepSeek
-- ✅ Kimi
-- ✅ 通义千问
-- ✅ 任何能输出 JSON 代码块的 AI
+| 平台 | 状态 |
+|------|------|
+| ChatGPT | ✅ 已测试 |
+| Claude | ✅ 已测试 |
+| Google Gemini | ✅ 已测试 |
+| DeepSeek | ✅ 已测试 |
+| Kimi | ✅ 已测试 |
+| 通义千问 | ✅ 已测试 |
+| 其他 AI 网站 | ✅ 只要能输出代码块就支持 |
+
+---
+
+## ❓ 常见问题
+
+### Q：按钮不出现？
+
+1. 检查插件弹窗顶部是否显示绿色圆点（已连接）
+2. 检查浏览器扩展管理页面，该网站是否允许此扩展运行
+3. 点击弹窗中的「🔍 扫描页面」手动触发
+4. 按 F12 查看 Console 是否有 `[AI Code Agent] Content script loaded` 输出
+
+### Q：发送后没反应？
+
+1. 检查 VS Code 状态栏右下角是否显示 `AI Agent :9960`
+2. 确认 VS Code 打开的项目和你要修改的项目一致
+3. 如果开了多个 VS Code，在弹窗中点击正确的窗口芯片切换
+
+### Q：Patch 匹配失败？
+
+这通常是 AI 输出的 `find` 字段和实际代码有微小差异。解决方法：
+- 让 AI 用 `write` 模式重新输出完整文件
+- 或者在提示词中强调「直接用 write 不要用 patch」
+
+### Q：如何撤销 AI 的修改？
+
+- 插件弹窗点击「⏪ 撤销修改」
+- 或在 VS Code 中 `Ctrl+Shift+P` → `AI Agent: 撤销上一次 AI 修改`
+- 或直接用 Git：`git log --grep="AI-Agent"` 找到记录后 `git reset`
+
+---
 
 ## 📝 更新日志
 
+### v1.3.0
+- 插件弹窗 UI 全面重构：顶部状态栏、折叠分组、芯片式窗口切换
+- 一键导出项目代码为 Word
+- 按钮发送改为直接 HTTP 通信，速度提升
+- 页面不可见时暂停扫描，减少内存占用
+
 ### v1.2.0
-- 性能：MutationObserver 智能过滤、端口缓存、fuzzyFind O(n) 优化
-- 稳定性：WS continuation frame、原子写入、临时文件清理
-- 修复：AI 偷懒检测误报、浮动按钮越界
-- 体验：状态栏实时刷新、提示词外置
+- WebSocket continuation frame 支持
+- Patch 匹配 5 级容错
+- 历史文件原子写入
+- 提示词规则强化
 
 ### v1.1.0
-- 插件总开关、一键复制提示词、自动跳转 VS Code
-- 多窗口自动寻找可用端口
-- Diff 预览「全部接受/全部拒绝」
-- WebSocket 指数退避重连
+- 插件总开关、一键复制提示词
+- 多窗口自动端口分配
+- Diff 预览全部接受/拒绝
 
 ### v1.0.0
-- 浏览器扩展自动检测代码块
-- VS Code 扩展接收并应用代码
-- Diff 预览 + Git 快照 + 操作历史
+- 首个版本：代码检测、Diff 预览、Git 快照、WebSocket 通信
+
+---
 
 ## 🤝 贡献
 
 欢迎提 Issue 和 PR！
+
+如果遇到问题：
+1. 在插件弹窗点击「🔍 调试信息」复制状态
+2. 到 [GitHub Issues](https://github.com/whywbhydyq/ai-code-agent/issues) 提交
 
 ## 📄 协议
 
